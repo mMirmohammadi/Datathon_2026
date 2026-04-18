@@ -175,6 +175,28 @@ def test_first_row_is_fully_normalized(loaded_db: Path) -> None:
     assert row["offer_type"] == "RENT"
 
 
+def test_comparis_platform_id_is_recovered_from_original_url(loaded_db: Path) -> None:
+    # The CSV's listing_id is an internal index ("10286"); the real comparis
+    # platform_id lives in /show/<id> at the tail of original_url.
+    row = _fetch(loaded_db, "10286")
+    assert row["platform_id"] == "36493173"
+    assert row["original_url"].endswith("/show/36493173")
+
+
+def test_robinreal_platform_id_equals_listing_id(loaded_db: Path) -> None:
+    # The two ROBINREAL rows in the enriched sample use a 24-char hex as both
+    # listing_id and platform_id.
+    with sqlite3.connect(loaded_db) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT listing_id, platform_id FROM listings WHERE scrape_source='ROBINREAL'"
+        ).fetchall()
+    assert rows, "expected at least one ROBINREAL row in the enriched sample"
+    for row in rows:
+        assert row["platform_id"] == row["listing_id"]
+        assert len(row["listing_id"]) == 24
+
+
 def test_second_row_geneva_with_duplex_becomes_maisonette(loaded_db: Path) -> None:
     # listing_id=1167: Genève, GE, 1205, Rue des Pavillons 5Bis 4, Maisonette.
     row = _fetch(loaded_db, "1167")

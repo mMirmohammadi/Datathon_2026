@@ -15,15 +15,19 @@ def rank_listings(
 ) -> list[RankedListingResult]:
     results: list[RankedListingResult] = []
     for candidate in candidates:
+        rrf = candidate.get("rrf_score")
         bm25 = candidate.get("bm25_score")
-        if bm25 is None or bm25 >= _BM25_NO_MATCH_THRESHOLD:
-            score = 0.0
-            reason = "Matched hard filters; no text match."
-        else:
+        if rrf is not None and rrf > 0.0:
+            score = float(rrf)
+            reason = _hybrid_reason(candidate)
+        elif bm25 is not None and bm25 < _BM25_NO_MATCH_THRESHOLD:
             # SQLite FTS5 bm25() returns a negative relevance score where more
             # negative = better. Flip sign so the API contract is higher=better.
             score = float(-bm25)
             reason = "Matched hard filters; ranked by text relevance."
+        else:
+            score = 0.0
+            reason = "Matched hard filters; no text or visual match."
         results.append(
             RankedListingResult(
                 listing_id=str(candidate["listing_id"]),
@@ -33,6 +37,35 @@ def rank_listings(
             )
         )
     return results
+
+
+def _hybrid_reason(candidate: dict[str, Any]) -> str:
+    """Human-readable reason string for a hybrid-ranked listing.
+
+    Reads the per-channel scores the search service attached to the candidate
+    dict and emits one clause per channel that contributed. Soft-signal
+    activations are reported as a single summary count because the individual
+    ranking identities are internal to `soft_signals.build_soft_rankings`.
+    """
+    parts = ["Matched hard filters"]
+    bm25 = candidate.get("bm25_score")
+    if bm25 is not None and bm25 < _BM25_NO_MATCH_THRESHOLD:
+        parts.append("text match")
+    visual = candidate.get("visual_score")
+    if visual is not None and visual > 0:
+        parts.append(f"visual match ({float(visual):.2f})")
+    text_embed = candidate.get("text_embed_score")
+    if text_embed is not None and text_embed > 0:
+        parts.append(f"semantic match ({float(text_embed):.2f})")
+    soft_count = candidate.get("soft_signals_activated")
+    if isinstance(soft_count, int) and soft_count > 0:
+        parts.append(
+            "soft preferences" if soft_count == 1
+            else f"{soft_count} soft preferences"
+        )
+    if len(parts) == 1:
+        parts.append("hybrid rank")
+    return "; ".join(parts) + "."
 
 
 def _to_listing_data(candidate: dict[str, Any]) -> ListingData:

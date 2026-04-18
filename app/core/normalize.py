@@ -95,6 +95,24 @@ _STREET_SPLIT_RE = re.compile(
 )
 
 
+_COMPARIS_PLATFORM_ID_RE = re.compile(r"/show/(\d+)(?:$|\?)")
+
+
+def extract_comparis_platform_id(url: str | None) -> str | None:
+    """Pull the numeric platform_id out of a comparis listing URL.
+
+    Comparis URLs look like
+    https://www.comparis.ch/immobilien/marktplatz/details/show/36493173.
+    Returns None when the URL is missing, empty, or not in the expected shape.
+    """
+    if not url:
+        return None
+    match = _COMPARIS_PLATFORM_ID_RE.search(url)
+    if match is None:
+        return None
+    return match.group(1)
+
+
 def split_street(value: str | None) -> tuple[str | None, str | None]:
     """Split a raw address string into (lowercased street_name, house_number).
 

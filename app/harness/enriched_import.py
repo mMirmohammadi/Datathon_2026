@@ -7,7 +7,12 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from app.core.normalize import slug, split_street, translate_object_category
+from app.core.normalize import (
+    extract_comparis_platform_id,
+    slug,
+    split_street,
+    translate_object_category,
+)
 
 
 FEATURE_COLUMNS = [
@@ -91,6 +96,36 @@ def _build_features_json(feature_flags: dict[str, int | None]) -> str:
     return json.dumps(keys)
 
 
+def _resolve_platform_id(listing_id: str, scrape_source: str | None, original_url: str | None) -> str:
+    """Recover the real scrape-side platform_id used by the image index.
+
+    COMPARIS stores the scrape id in the `/show/<id>` tail of original_url.
+    ROBINREAL uses the 24-char hex listing_id as its platform_id already.
+    SRED and unknown sources fall back to listing_id and emit [WARN].
+    """
+    source = (scrape_source or "").upper()
+    if source == "COMPARIS":
+        recovered = extract_comparis_platform_id(original_url)
+        if recovered is None:
+            print(
+                f"[WARN] platform_id_fallback: source=COMPARIS listing_id={listing_id} "
+                f"expected=regex match /show/<id> in original_url, got={original_url!r}, "
+                f"fallback=listing_id",
+                flush=True,
+            )
+            return listing_id
+        return recovered
+    if source == "ROBINREAL":
+        return listing_id
+    print(
+        f"[WARN] platform_id_fallback: source={source!r} listing_id={listing_id} "
+        f"expected=one of COMPARIS/ROBINREAL, got={source!r}, "
+        f"fallback=listing_id",
+        flush=True,
+    )
+    return listing_id
+
+
 def _normalize_row(raw: dict[str, str]) -> dict[str, Any]:
     city_slug = slug(raw.get("city"))
     street_name, house_number = split_street(raw.get("street"))
@@ -98,10 +133,13 @@ def _normalize_row(raw: dict[str, str]) -> dict[str, Any]:
     feature_flags = {col: _to_feature_int(raw.get(col, "")) for col in FEATURE_COLUMNS}
 
     listing_id = (raw.get("listing_id") or "").strip()
+    scrape_source = raw.get("scrape_source") or None
+    original_url = raw.get("original_url") or None
+    platform_id = _resolve_platform_id(listing_id, scrape_source, original_url)
     return {
         "listing_id": listing_id,
-        "platform_id": listing_id,
-        "scrape_source": (raw.get("scrape_source") or None),
+        "platform_id": platform_id,
+        "scrape_source": scrape_source,
         "title": (raw.get("title") or "").strip() or "(untitled)",
         "description": _strip_html(raw.get("description_head")),
         "street": street_name,
@@ -124,7 +162,7 @@ def _normalize_row(raw: dict[str, str]) -> dict[str, Any]:
         "object_category": translate_object_category(raw.get("object_category")),
         "object_category_raw": (raw.get("object_category") or None),
         "object_type": (raw.get("object_type") or None),
-        "original_url": (raw.get("original_url") or None),
+        "original_url": original_url,
         "raw_json": json.dumps(raw, ensure_ascii=False),
     }
 

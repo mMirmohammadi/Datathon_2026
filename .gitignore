@@ -37,6 +37,10 @@ enrichment/exports/
 # Sample data subset exports (from origin/main).
 sample_data_enriched/
 
+# Teammate-built dataset bundle (listings.db.gz + embeddings + landmarks;
+# ~100 MB; installed into data/ by scripts/install_dataset.py).
+datathon2026_dataset/
+
 # Claude Code local settings + scheduler state (machine-local).
 .claude/
 

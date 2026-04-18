@@ -30,6 +30,7 @@ image_search = [
     "sentencepiece>=0.2",
     "Pillow>=10.3",
     "numpy>=1.26",
+    "sentence-transformers>=3.0",
 ]
 
 # Pin a CUDA 12.8 torch wheel on Linux so qolam (RTX 5090, driver 12.8) can use
@@ -54,3 +55,8 @@ packages = ["app", "apps_sdk"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-m 'not smoke'"
+markers = [
+    "smoke: slow end-to-end checks against the real teammate bundle; excluded from the default run",
+]
