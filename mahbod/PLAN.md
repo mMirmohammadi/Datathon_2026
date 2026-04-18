@@ -159,13 +159,133 @@ One-shot runner: `scripts/enrich_all.py` chains all enrichment scripts. All writ
 - Writes markdown leaderboard to `eval/reports/YYYYMMDD-HHMM.md`. ~$4/full run.
 - NEW `tests/test_failure_modes.py` — 8 proactive tests (unicode typos, impossible conflicts, empty filters, IT-language, sale attempt, misspelled landmark, cheap-vs-expensive conflict, adversarial feature set). Each asserts graceful fallback via `meta.warnings`.
 
-### Phase 5 — Personalization bonus (~2h)
+### Phase 5 — Personalization bonus (~4h)
 
-- NEW `app/participant/personalization.py`: in-memory `SESSIONS: dict[str, UserProfile]`, keyed by header `X-Session-Id`. Tracks `query_history, favorited, skipped, clicks`.
-- Inferred profile (recomputed on each mutation): `preferred_city` (mode, ≥2 signals), `preferred_rooms_range (p25,p75)`, `preferred_feature_set` (≥60% overlap), `preferred_style_vector` (centroid of favorited listings' CLIP image embeddings + bge-m3 document embeddings).
-- Ranking boost: `score_final = score_base + 0.1·cos(listing_vec, pref_centroid) + 0.05·feature_overlap`, capped at +0.2.
-- NEW `app/api/feedback.py` router: `POST /users/{id}/feedback`, `GET /users/{id}/profile`, `DELETE /users/{id}`.
-- Demo flow: run "bright modern flat in Zurich" 3x, favorite a high-floor loft each time, show reordering on 4th query without changing the query text.
+Designed to cover **every** signal listed in `challenge.md` lines 65-74 and **every** dimension in the bonus question at line 78 ("locations, price bands, listing styles, image types, building features"), with the explicit anti-overfitting constraint from `challenge.md` line 255 ("use user history without overfitting to one past action"). Each sub-phase below is independently droppable — see tail of plan for drop order.
+
+**5a. Storage + endpoints**
+- NEW `app/api/feedback.py` — router with three endpoints:
+  - `POST /users/{session_id}/feedback` — body: `{action, listing_id, duration_ms?, query?, timestamp?}`.
+  - `GET /users/{session_id}/profile` — returns the inferred profile + breakdown used by the demo's "why you saw this" panel.
+  - `DELETE /users/{session_id}` — reset; also supports `GDPR`-style opt-out.
+- NEW `app/participant/personalization.py` — profile I/O + inference + boost.
+- Persistence: per-user JSON at `data/user_profiles/{session_id}.json` (gitignored). Chosen over in-memory so **"longer-term interaction or preference history"** (challenge.md L61) survives server restarts. Size is trivial (one small JSON per user). Profile TTL = 90 days since last interaction; older profiles are auto-purged on startup and `[INFO]` logged.
+- Session id via header `X-Session-Id` (read in `app/api/routes/listings.py`). Literal `anonymous` disables tracking: `[INFO] personalization=opted_out`.
+
+**5b. Signals — covers challenge.md L65-L74 one-by-one**
+
+| Challenge bullet | Action name | Weight for profile centroid | Notes |
+|---|---|---|---|
+| favorites (L68) | `favorite` | +1.0 | strongest positive |
+| clicks (L69) | `click` | +0.2 | card click without detail open |
+| detail views (L70) | `view` | +0.3 base | carries `duration_ms` |
+| dwell time (L71) | — | `view` weight becomes `0.3·log10(1 + duration_ms/1000)` clipped to `[0.3, 0.8]` | longer dwell → stronger signal, capped to prevent one-action dominance |
+| hides or skips (L72) | `skip`, `hide` | `−0.5`, `−1.0` | negative signals |
+| past searches (L66) | `search` | — | stored in query history, used by 5d |
+| historical query patterns (L73) | — | — | derived from query history by 5d |
+| inferred preference documents (L65) | — | — | LLM-generated summary by 5e |
+| summaries (L67) | — | — | same as 5e |
+| preference graph (L74) | — | — | feature co-occurrence by 5c |
+
+Each interaction is stamped with `ts`. Weight decay: `w_decayed = w · exp(−Δdays / 30)` so stale actions fade — this is the primary guard against overfitting to one past action (challenge.md L255).
+
+**5c. Profile inference — covers all 5 bonus-question dimensions (L78)**
+
+Recomputed on every mutation. Each dimension only activates above a **min-sample threshold** (second overfitting guard):
+
+| Bonus-question dimension (L78) | Inferred field | Min samples | Computation |
+|---|---|---|---|
+| **locations** | `preferred_cities: dict[city, weight]` | ≥3 positive interactions in that city | weighted count by action weight × decay |
+| **price bands** | `preferred_price_band: (p25, p75)` | ≥3 favorites | weighted quantiles over favorited prices |
+| **building features** | `preferred_feature_set: dict[feature, weight]` | ≥2 favorites sharing feature | features present in ≥60% of favorited listings, weighted |
+| **listing styles** | `preferred_style_vector: np.ndarray[1024]` | ≥2 favorites | weighted centroid of favorited listings' bge-m3 doc embeddings |
+| **image types** | `preferred_image_vector: np.ndarray[512]` | ≥2 favorites | weighted centroid of CLIP image embeddings (from `scripts/enrich_images.py` output) |
+
+Plus three derived signals from the challenge bullets:
+- `preferred_rooms_range: (p25, p75)` — min 3 favorites.
+- `negative_feature_set` — features over-represented in skipped/hidden vs favorited (for the skip/hide bullet L72).
+- `feature_cooccurrence_graph: dict[tuple[feature, feature], weight]` — pair counts in favorites. This is the **inferred preference graph** from L74. Lightweight dict, no graph library.
+
+**5d. Query-history signal — covers L66 (past searches) + L73 (historical query patterns)**
+- Keep last 20 queries with timestamps in profile.
+- At query time: if `len(history) ≥ 3`, encode each historical query with bge-m3, time-decayed weighted mean → `query_centroid`. Blend with current query embedding for **retrieval only**: `q_personalized = 0.8·q_current + 0.2·q_centroid`, L2-normalized. Weight 0.2 is low to avoid drowning the explicit query.
+- Also detect repeated hard filters in past searches: if the user submitted `city=Zurich` in ≥70% of the last 10 queries, attach a weak implicit city preference at retrieval time (NOT as a hard filter — logged `[INFO] implicit_filter_hint=Zurich`).
+
+**5e. LLM preference summary — covers L65 (inferred preference documents) + L67 (summaries)**
+- Every 10th interaction OR on demand via `GET /users/{id}/profile?regenerate=true`: one Claude call summarizes the user in ≤3 sentences from {last 10 favorites, last 10 skips, last 20 queries}.
+- Stored as `inferred_summary: str` in profile. Cached until next 10 interactions.
+- Used in two places:
+  1. `render_reason()` in `explain.py` can include "Matches your past preference for X" when a listing scores high on personalization signals.
+  2. Returned by `GET /users/{id}/profile` for the demo's transparency panel.
+- Rate-limited to 1 summary / 5 minutes / user to control cost. Falls back to template summary on API failure with `[WARN]` per CLAUDE.md §5.
+
+**5f. Ranking boost — linear, transparent, capped**
+
+Applied after base ranking in `app/participant/ranking.py`:
+
+```
+boost = 0.0
+  + min(0.08, 0.02 · Σ_w w_favorites_in(listing.city))          # locations, capped 0.08
+  + 0.05 · triangle(listing.price, p25_fav, p75_fav)            # price bands
+  + 0.04 · jaccard(listing.features, preferred_feature_set)      # building features (direct)
+  + 0.04 · graph_match(listing.features, cooccurrence_graph)     # preference graph
+  + 0.06 · cos(listing.doc_embedding, preferred_style_vector)   # listing styles
+  + 0.06 · cos(listing.image_embedding, preferred_image_vector) # image types
+  + 0.03 · cos(listing.doc_embedding, query_centroid)           # past searches
+  − 0.10 · jaccard(listing.features, negative_feature_set)
+  − 0.10 if listing_id in skipped (last 30 days)
+  − 0.20 if listing_id in hidden (ever)
+Each additive term gated by its own min-sample threshold (→ 0 if below).
+Final boost clipped to [−0.25, +0.25]   # third overfitting guard
+score_final = score_base + boost
+```
+
+Returned in `meta.personalization: {boost, components: {...}, summary}` for UI transparency. Exposes weights so jury/user can see *why* ranking shifted.
+
+**5g. Cold start + opt-out + logging (CLAUDE.md §5 compliance)**
+- `n_interactions ≤ 1`: `boost = 0`, log `[INFO] personalization=cold_start session=... interactions=N` once per request (not per listing).
+- `session_id == "anonymous"` or header missing: `boost = 0`, log `[INFO] personalization=opted_out`.
+- LLM summary failure: fall back to template, `[WARN] user_summary: expected=claude, got=error, fallback=template_summary`.
+- Embedding missing for a listing (not yet in index): `[WARN] style_boost: expected=embedding, got=None listing_id=X, fallback=skip_component`.
+
+**5h. Tests — `tests/test_personalization.py`**
+1. `test_cold_start_boost_is_zero` — 0 or 1 interaction → boost == 0.
+2. `test_monotonic_city_boost` — adding 3 Zurich favorites strictly increases Zurich-listing boost.
+3. `test_boost_is_capped` — 100 favorites on one listing → total boost ≤ 0.25.
+4. `test_time_decay` — an interaction 60 days ago has < 30% weight of one today (exp(−60/30) ≈ 0.135 < 0.3 ✓).
+5. `test_opposite_signals_cancel` — favoriting and skipping the same listing → net boost ≈ 0.
+6. `test_opt_out_anonymous_session` — `X-Session-Id: anonymous` → boost == 0, no file written.
+7. `test_persistence_across_restart` — write profile, reload, ensure it re-applies.
+8. `test_graph_cooccurrence_emerges_after_3_favorites` — 3 balcony+parking favorites → balcony+parking pair score > singletons.
+
+**5i. Demo flow** (script: `scripts/demo_personalization.py`)
+Scripted walkthrough shown during presentation:
+1. Query `"bright modern flat in Zurich"` — baseline top 10.
+2. `POST /users/demo/feedback` `favorite` 2 modern high-floor listings + `view` with 30s dwell on a similar one + `skip` one ground-floor listing.
+3. Re-run same query — show the top 10 has reordered; `meta.personalization.boost` non-zero; `meta.personalization.summary` shows inferred "modern high-floor preference in Zurich" (generated by Claude).
+4. Query `"apartment"` (intentionally vague) — show past-search centroid steers results toward Zurich modern even though city is absent.
+5. `DELETE /users/demo` — repeat step 4, show results revert to neutral.
+
+### Mapping to `challenge.md` — every bonus bullet covered
+
+| `challenge.md` line | Bullet | Covered in |
+|---|---|---|
+| L65 | inferred preference documents | 5e |
+| L66 | past searches | 5d |
+| L67 | summaries | 5e |
+| L68 | favorites | 5b action `favorite` |
+| L69 | clicks | 5b action `click` |
+| L70 | detail views | 5b action `view` |
+| L71 | dwell time | 5b `view.duration_ms` |
+| L72 | hides or skips | 5b actions `skip`, `hide` + negative-features derivation in 5c + skip penalty in 5f |
+| L73 | historical query patterns | 5d |
+| L74 | user preference graph | 5c `feature_cooccurrence_graph` |
+| L78 locations | 5c `preferred_cities`, 5f term 1 |
+| L78 price bands | 5c `preferred_price_band`, 5f term 2 |
+| L78 listing styles | 5c `preferred_style_vector`, 5f term 5 |
+| L78 image types | 5c `preferred_image_vector`, 5f term 6 |
+| L78 building features | 5c `preferred_feature_set`, 5f terms 3-4 |
+| L255 "without overfitting to one past action" | min-sample thresholds (5c) + decay (5b) + hard cap ±0.25 (5f) + cold-start zero-boost (5g) |
 
 ### Phase 6 — Demo UI (~2h)
 
@@ -204,12 +324,15 @@ Image bundle (~135MB) goes in the container image; DB on the volume; enrichment 
 - `app/participant/text_feature_patterns.py` — DE/FR/IT/EN regex dictionaries.
 - `app/participant/geo.py` — landmark gazetteer + Haversine helpers.
 - `app/participant/relaxation.py` — 0-candidate fallback ladder.
-- `app/participant/personalization.py` — sessions + boost logic.
-- `app/api/feedback.py` — session feedback endpoints.
+- `app/participant/personalization.py` — profile I/O, inference, 9-component boost formula, overfitting guards, CLAUDE.md §5 warn logs.
+- `app/participant/user_summary.py` — Claude-generated ≤3-sentence preference summary (Phase 5e), 5-min rate limit, template fallback.
+- `app/api/feedback.py` — session feedback endpoints (POST /users/{id}/feedback, GET /users/{id}/profile, DELETE /users/{id}).
+- `data/user_profiles/` — per-user JSON store (gitignored; add `data/user_profiles/` to `.gitignore`).
+- `scripts/demo_personalization.py` — scripted walkthrough for the bonus demo.
 - `scripts/enrich_geocode.py`, `enrich_text_features.py`, `build_embeddings.py`, `enrich_images.py`, `enrich_geo.py`, `enrich_all.py`, `evaluate.py`.
 - `data/cache/landmarks.json`, `data/embeddings.npy`, `data/embedding_ids.json`.
 - `eval/queries.jsonl`, `eval/judgments/`, `eval/reports/`.
-- `tests/test_failure_modes.py`, `tests/test_query_plan.py`, `tests/test_retrieval.py`, `tests/test_scoring.py`.
+- `tests/test_failure_modes.py`, `tests/test_query_plan.py`, `tests/test_retrieval.py`, `tests/test_scoring.py`, `tests/test_personalization.py` (8 tests: cold-start zero-boost, monotonic city boost, cap, time decay, skip/favorite cancellation, opt-out, persistence across restart, co-occurrence graph emergence).
 
 **Edit:**
 - `app/models/schemas.py` — add `Landmark`, `SoftPreferences`, `QueryPlan`.
@@ -316,9 +439,9 @@ npx cloudflared tunnel --url http://localhost:8000
 | 2. Enrichment (geocode, text features, embeddings, CLIP, stations, landmarks) | 5 | yes (embeddings + FTS5); rest high-impact |
 | 3. Graceful degradation | 2 | yes |
 | 4. Eval framework + failure tests | 3 | yes for credibility |
-| 5. Personalization bonus | 2 | no (bonus) |
+| 5. Personalization bonus (5a-5i) | 4 | no (bonus) |
 | 6. Demo UI polish | 2 | yes for presentation |
 | 7. Deploy | 1 | yes |
-| **Total** | **~21h** | |
+| **Total** | **~23h** | |
 
-**If time is tight, drop in this order:** Phase 5 (personalization bonus) → CLIP image scoring (substitute Pillow-luminance only) → Nominatim top-up in Phase 2 (`reverse_geocoder`-only is enough for city filter) → LLM-polish in explanations.
+**If time is tight, drop in this order:** within Phase 5, drop **5e** (LLM preference summary; template summary still works) → **5d** (query-history blend; retrieval still sound) → the `feature_cooccurrence_graph` term in 5c/5f (keep direct feature overlap) → else drop all of Phase 5. Outside Phase 5: CLIP image scoring (substitute Pillow-luminance only) → Nominatim top-up in Phase 2 (`reverse_geocoder`-only is enough for city filter) → LLM-polish in explanations.
