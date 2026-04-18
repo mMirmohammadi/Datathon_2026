@@ -1,0 +1,11 @@
+# Swiss phone number extraction.
+#
+# Accepts: +41 XX XXX XX XX  /  0041 XX...  /  0XX XXX XX XX  (local format)
+# Separators allowed: space, dot, dash, non-breaking space, or none.
+# Must have a plausible Swiss area code (first digit 1-9, not 0).
+
+agency_phone:
+  base_confidence: 0.85
+  # One language-agnostic pattern suffices — Swiss phone format is uniform.
+  all:
+    - '(?:\+41|0041|0)\s*\(?0?([1-9]\d)\)?[\s.\-\u00a0]?(\d{3})[\s.\-\u00a0]?(\d{2})[\s.\-\u00a0]?(\d{2})'

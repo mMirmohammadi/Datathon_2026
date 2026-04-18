@@ -1,0 +1,33 @@
+# Negation tokens used by the lookback guard in common.text_extract.is_negated.
+#
+# The extractor checks the last `lookback_tokens` whitespace-separated tokens
+# BEFORE a match; if any of the patterns below matches the window (as a
+# word-boundary regex), the match is marked negated and discarded.
+#
+# Patterns are regex, not literal strings — multi-word negations like
+# "pas de" use \s+ to tolerate varied whitespace.
+
+lookback_tokens: 3
+
+de:
+  - 'kein(?:e|en|er|es)?'
+  - 'ohne'
+  - 'nicht'
+  - 'weder'
+
+fr:
+  - 'pas\s+de'
+  - 'sans'
+  - 'aucun(?:e|es|s)?'
+  - 'ne\s+pas'
+
+it:
+  - 'senza'
+  - 'nessun(?:a|o|i|e)?'
+  - 'non'
+
+en:
+  - 'no'
+  - 'without'
+  - 'not'
+  - 'never'

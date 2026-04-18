@@ -1,0 +1,11 @@
+# Area extraction in square meters.
+# Capture group 1 is the integer m² number.
+# Accepted range (validated in the script): 10 <= area <= 500.
+# Pattern requires explicit "m²" or "m2" unit to avoid matching random numbers.
+
+area:
+  base_confidence: 0.85
+  all:
+    # Negative lookbehind prevents matching digits that are part of a larger
+    # number (e.g., "2120 m²" could otherwise hit the "20 m²" substring).
+    - '(?<!\d)(\d{2,4})(?:[\.,]\d{1,2})?\s*m(?:²|2|\^2|\u00B2)(?!\w)'

@@ -1,0 +1,20 @@
+# Agency-name extraction from listing text.
+#
+# Three strategies in priority order:
+#   1. Derive from extracted agency_email domain (highest reliability; lowest
+#      semantic fidelity — "robinreal" is not a formal company name but it
+#      uniquely identifies the lister).
+#   2. Explicit "Vermietung durch X" / "Gestion X" / "Handled by X" phrases.
+#   3. Signature line with a name followed by role ("Anna Muster, Bewirtschafterin").
+#
+# For M4 we implement strategy 1 only (domain-derived) because it's unambiguous.
+# Strategies 2 and 3 are strong in principle but require careful length
+# bounding + company-suffix detection to avoid capturing random prose. They
+# remain pending and pass 3 sentinel-fills.
+
+agency_name_from_domain:
+  base_confidence: 0.70
+  # Not actually a regex — the script's dedicated derive_agency_name_from_domain
+  # path bypasses find_first_match. Keeping the YAML anchor so the config
+  # surface is uniform.
+  source_field: agency_email

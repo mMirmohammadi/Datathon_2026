@@ -1,0 +1,229 @@
+# Multilingual regex patterns for the 12 structured feature flags.
+#
+# Format:
+#   <feature_name>:
+#     base_confidence: 0.0-1.0   # prior confidence before lang-match + negation penalties
+#     de: [regex, ...]           # German
+#     fr: [regex, ...]           # French
+#     it: [regex, ...]           # Italian
+#     en: [regex, ...]           # English
+#
+# Notes:
+# - Patterns are compiled with re.IGNORECASE | re.UNICODE.
+# - No need to wrap in word-boundaries — most patterns already have \b; if they
+#   don't, the extractor treats partial-string matches as valid hits.
+# - Keep patterns precise: false positives are worse than missed matches because
+#   they inflate feature_balcony=1 for flats without a balcony.
+
+balcony:
+  base_confidence: 0.80
+  de:
+    - '\bBalkon(?:e|en|s)?\b'
+    - '\bTerrasse[ns]?\b'
+    - '\bLoggia[s]?\b'
+    - '\bSitzplatz\b'
+  fr:
+    - '\bbalcons?\b'
+    - '\bterrasses?\b'
+    - '\bloggias?\b'
+  it:
+    - '\bbalcon[ei]\b'
+    - '\bterrazz[aoei]\b'
+    - '\blogge?\b'
+  en:
+    - '\bbalcon(?:y|ies)\b'
+    - '\bterraces?\b'
+    - '\bpatios?\b'
+
+elevator:
+  base_confidence: 0.85
+  de:
+    # \w* suffix catches Swiss-German compounds: Liftzugang, Lifthalle, Personenaufzug,
+    # Aufzuganlage, Fahrstuhlanlage. Prefix not loosened to avoid matching e.g. "Geschirrlift".
+    - '\bLift\w*\b'
+    - '\bAufzug\w*\b'
+    - '\bFahrstuhl\w*\b'
+    - '\bPersonenlift\w*\b'
+  fr:
+    - '\bascenseurs?\b'
+  it:
+    - '\bascensor[ei]\b'
+  en:
+    - '\belevators?\b'
+    - '\blifts?\b'
+
+parking:
+  base_confidence: 0.75
+  de:
+    - '\bParkplatz\b'
+    - '\bParkpl[äa]tze\b'
+    - '\bAussenparkplatz\b'
+    - '\bAutoeinstellhalle\b'
+    - '\bCarport\b'
+  fr:
+    - '\bplace\s+de\s+parc\b'
+    - '\bparkings?\b'
+    - '\bplaces?\s+de\s+parking\b'
+    - '\bcarports?\b'
+  it:
+    - '\bposto\s+auto\b'
+    - '\bparchegg[io]\b'
+  en:
+    - '\bparkings?\b'
+    - '\bparking\s+spaces?\b'
+    - '\bcarports?\b'
+
+garage:
+  base_confidence: 0.80
+  de:
+    - '\b(?:Einzel|Doppel|Tief)?garage\b'
+    - '\bEinstellhalle\b'
+  fr:
+    - '\bgarages?\b'
+    - '\bbox\s+(?:individuel|ferm[ée])\b'
+  it:
+    - '\bbox\s+auto\b'
+    - '\bbox\s+chiuso\b'
+    - '\bautorimesse?\b'
+  en:
+    - '\bgarages?\b'
+
+fireplace:
+  base_confidence: 0.85
+  de:
+    - '\bChemin[ée]e\b'
+    - '\bKamin\b'
+    - '\bSchwedenofen\b'
+    - '\bHolzofen\b'
+  fr:
+    - '\bchemin[ée]es?\b'
+    - '\bpo[êe]les?\s+(?:à\s+bois|su[ée]dois)?\b'
+  it:
+    - '\bcaminett[oi]\b'
+    - '\bcamin[oi]\b'
+  en:
+    - '\bfireplaces?\b'
+    - '\bwood-?burning\s+stoves?\b'
+
+child_friendly:
+  base_confidence: 0.70
+  de:
+    - '\bkinderfreundlich\b'
+    - '\bfamilienfreundlich\b'
+    - '\bfamili[eä]r\b'
+    - '\bideal\s+f[üu]r\s+Familien\b'
+  fr:
+    - '\bfamilial(?:e|es|aux)?\b'
+    - '\bid[ée]al\s+pour\s+(?:les\s+)?familles\b'
+    - '\badapt[ée]\s+aux\s+enfants\b'
+  it:
+    - '\badatt[oa]\s+(?:ai\s+)?bambini\b'
+    - '\bideale\s+per\s+famiglie\b'
+    - '\bfamiliar[ei]\b'
+  en:
+    - '\bchild[- ]friendly\b'
+    - '\bfamily[- ]friendly\b'
+    - '\bideal\s+for\s+families\b'
+
+pets_allowed:
+  base_confidence: 0.75
+  de:
+    - '\bHaustiere?\s+(?:sind\s+)?erlaubt\b'
+    - '\bHaustiere?\s+willkommen\b'
+    - '\btierfreundlich\b'
+    - '\bHunde?\s+(?:sind\s+)?erlaubt\b'
+    - '\bKatzen?\s+(?:sind\s+)?erlaubt\b'
+  fr:
+    - '\banimaux\s+(?:accept[ée]s|admis|autoris[ée]s|bienvenus)\b'
+  it:
+    - '\banimali\s+(?:ammessi|accettati|autorizzati|benvenuti)\b'
+  en:
+    - '\bpets\s+(?:allowed|welcome|ok)\b'
+    - '\bpet[- ]friendly\b'
+
+temporary:
+  base_confidence: 0.80
+  de:
+    - '\bbefristet\b'
+    - '\bZwischenmiete\b'
+    - '\bUntermiete\s+tempor[äa]r\b'
+    - '\bvor[üu]bergehend\b'
+    - '\bkurzfristig\b'
+  fr:
+    - '\btemporaires?\b'
+    - '\bsous[- ]location\b'
+    - '\bcourt\s+terme\b'
+  it:
+    - '\btemporane[oa]\b'
+    - '\baffitto\s+breve\b'
+    - '\bbreve\s+periodo\b'
+  en:
+    - '\btemporary\b'
+    - '\bshort[- ]term\b'
+    - '\bsublets?\b'
+
+new_build:
+  base_confidence: 0.85
+  de:
+    - '\bNeubau(?:wohnung)?\b'
+    - '\bErstvermietung\b'
+    - '\bErstbezug\b'
+  fr:
+    - '\bconstruction\s+neuve\b'
+    - '\bpremi[èe]re\s+location\b'
+    - '\bneu[fs]?\b'
+  it:
+    - '\bnuov[oa]\s+costruzione\b'
+    - '\bprima\s+locazione\b'
+  en:
+    - '\bnew[- ]builds?\b'
+    - '\bnewly[- ]built\b'
+    - '\bbrand[- ]new\b'
+
+wheelchair_accessible:
+  base_confidence: 0.85
+  de:
+    - '\brollstuhl(?:g[äa]ngig|gerecht)\b'
+    - '\bbarrierefrei\b'
+    - '\bbehindertengerecht\b'
+  fr:
+    - '\baccessible\s+(?:aux\s+)?(?:handicap[ée]s|fauteuils?\s+roulants?)\b'
+    - '\bsans\s+barri[èe]res?\b'
+  it:
+    - '\baccessibile\s+(?:ai\s+)?disabili\b'
+    - '\bsenza\s+barriere\b'
+  en:
+    - '\bwheelchair[- ]accessible\b'
+    - '\bbarrier[- ]free\b'
+
+private_laundry:
+  base_confidence: 0.75
+  de:
+    - '\beigene\s+Waschmaschine\b'
+    - '\bWaschmaschine\s+in\s+der\s+Wohnung\b'
+    - '\bWaschturm\b'
+    - '\beigener\s+Trockner\b'
+  fr:
+    - '\bmachine\s+à\s+laver\s+priv[ée]e?\b'
+    - '\blave[- ]linge\s+dans\s+le\s+logement\b'
+  it:
+    - '\blavatrice\s+privata\b'
+    - '\blavatrice\s+in\s+appartamento\b'
+  en:
+    - '\bin[- ]unit\s+laundry\b'
+    - '\bprivate\s+washing\s+machines?\b'
+
+minergie_certified:
+  base_confidence: 0.95
+  de:
+    - '\bMinergie(?:-[APE])?(?:-[APE])?\b'
+    - '\bMinergie-zertifiziert\b'
+  fr:
+    - '\bMinergie(?:-[APE])?(?:-[APE])?\b'
+    - '\bcertifi[ée]e?\s+Minergie\b'
+  it:
+    - '\bMinergie(?:-[APE])?(?:-[APE])?\b'
+    - '\bcertificat[oa]\s+Minergie\b'
+  en:
+    - '\bMinergie(?:-[APE])?(?:-[APE])?\b'
+    - '\bMinergie[- ]certified\b'

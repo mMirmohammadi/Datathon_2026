@@ -1,0 +1,38 @@
+# Availability-date extraction.
+#
+# Three sub-patterns:
+#   available_from_immediate: "sofort", "immédiatement", "subito", "immediately" →
+#     today's ISO date
+#   available_from_iso: YYYY-MM-DD
+#   available_from_european: DD.MM.YYYY or DD/MM/YYYY
+#
+# Month names ("Mai 2026", "January 2027") are deliberately out-of-scope for
+# M4 — they require locale-specific month tables and year disambiguation.
+# Those rows remain pending and pass 3 sentinel-fills.
+
+available_from_immediate:
+  base_confidence: 0.80
+  de:
+    - '\b(?:per\s+)?sofort\b'
+    - '\bab\s+sofort\b'
+    - '\bper\s+sofort\s+oder\s+nach\s+Vereinbarung\b'
+  fr:
+    - '\bimm[ée]diatement\b'
+    - '\bd[èe]s\s+maintenant\b'
+  it:
+    - '\bsubito\b'
+    - '\bimmediatamente\b'
+  en:
+    - '\bimmediately\b'
+    - '\bimmediate\s+occupancy\b'
+
+available_from_iso:
+  base_confidence: 0.95
+  all:
+    - '\b((?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))\b'
+
+available_from_european:
+  base_confidence: 0.90
+  all:
+    # Capture day, month, year separately; validated in the script.
+    - '\b(0?[1-9]|[12]\d|3[01])[./](0?[1-9]|1[0-2])[./]((?:19|20)\d{2})\b'

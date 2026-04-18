@@ -9,6 +9,10 @@ dependencies = [
     "httpx>=0.28.0,<1.0.0",
     "mcp>=1.25.0",
     "uvicorn[standard]>=0.32.0,<1.0.0",
+    # enrichment pipeline
+    "reverse_geocoder>=1.5.1",
+    "pyyaml>=6.0",
+    "rapidfuzz>=3.9",
 ]
 
 [dependency-groups]

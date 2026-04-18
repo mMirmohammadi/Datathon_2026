@@ -1,0 +1,23 @@
+# Year-built extraction: 4-digit year preceded by a "built in" phrase.
+#
+# The capturing group (group 1) is the year itself; the extractor returns
+# that as the field value after validating it's a plausible construction
+# year (1800-current_year+5, checked in pass 2 script).
+
+year_built:
+  base_confidence: 0.90
+  de:
+    - 'Baujahr\s*[:\-]?\s*(1[89]\d{2}|20\d{2})'
+    - 'erbaut\s+(?:im\s+Jahr\s+)?(1[89]\d{2}|20\d{2})'
+    - 'Bauzeit[:\s]+(1[89]\d{2}|20\d{2})'
+  fr:
+    - 'ann[ée]e\s+de\s+construction\s*[:\-]?\s*(1[89]\d{2}|20\d{2})'
+    - 'construit\s+en\s+(1[89]\d{2}|20\d{2})'
+    - 'b[âa]ti\s+en\s+(1[89]\d{2}|20\d{2})'
+  it:
+    - 'anno\s+di\s+costruzione\s*[:\-]?\s*(1[89]\d{2}|20\d{2})'
+    - 'costruit[oa]\s+nel\s+(1[89]\d{2}|20\d{2})'
+  en:
+    - 'built\s+in\s+(1[89]\d{2}|20\d{2})'
+    - 'year\s+built\s*[:\-]?\s*(1[89]\d{2}|20\d{2})'
+    - 'construction\s+year\s*[:\-]?\s*(1[89]\d{2}|20\d{2})'

@@ -1,0 +1,53 @@
+# Floor extraction — split into three mutually-exclusive sub-fields because
+# the right numeric value depends on whether we matched a digit, a "ground
+# floor" lexeme, or a "basement" lexeme.
+#
+# The extractor tries them in priority order: ground > basement > numeric.
+# That way "rez-de-chaussée" wins over "3e étage" when both appear.
+#
+# Output semantics:
+#   floor_ground   -> floor = 0
+#   floor_basement -> floor = -1
+#   floor_numeric  -> floor = captured integer 1..99
+
+floor_ground:
+  base_confidence: 0.90
+  de:
+    - '\bErdgeschoss\b'
+    - '\bParterre\b'
+    - '\bHochparterre\b'
+    - '\bEG\b'
+  fr:
+    - '\brez[- ]de[- ]chauss[eé]e?\b'
+    - '\bRDC\b'
+  it:
+    - '\bpiano\s+terra\b'
+    - '\bpiano\s+terreno\b'
+  en:
+    - '\bground\s+floor\b'
+
+floor_basement:
+  base_confidence: 0.90
+  de:
+    - '\bSouterrain\b'
+    - '\bUntergeschoss\b'
+    - '\bKellergeschoss\b'
+  fr:
+    - '\bsous[- ]sol\b'
+  it:
+    - '\bpiano\s+interrato\b'
+    - '\bseminterrato\b'
+  en:
+    - '\bbasement\b'
+    - '\blower\s+ground\s+floor\b'
+
+floor_numeric:
+  base_confidence: 0.80
+  de:
+    - '\b(\d{1,2})\.?\s*(?:Stock|Stockwerk|OG|Obergeschoss|Etage)\b'
+  fr:
+    - '\b(\d{1,2})\s*(?:er|ère|ème|e)?\s*étage\b'
+  it:
+    - '\b(\d{1,2})[°º]?\s*piano\b'
+  en:
+    - '\b(\d{1,2})(?:st|nd|rd|th)?\s+floor\b'

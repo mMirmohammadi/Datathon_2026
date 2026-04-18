@@ -1,0 +1,9 @@
+# Email extraction (RFC 5322 subset).
+#
+# Requires a TLD from a curated list (ch, com, de, fr, it, org, net, li, eu)
+# to avoid matching file extensions like "plan.pdf" or ".min.css".
+
+agency_email:
+  base_confidence: 0.95
+  all:
+    - '\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.(?:ch|com|de|fr|it|org|net|li|eu|info|at)\b'

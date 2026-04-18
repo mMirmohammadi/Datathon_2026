@@ -1,0 +1,136 @@
+# Landmark truth table for crossref testing of pass 1a (offline reverse-geocoder).
+# Each entry is a hand-labeled (lat, lng) → (canton_code, city_contains) tuple.
+# Labels assigned from geographic ground truth (Wikipedia canton membership),
+# NOT from rg output, so a regression in rg's admin1 labels is caught.
+#
+# Covers all 26 Swiss cantons so crossref is exhaustive per canton.
+
+- name: Paradeplatz Zurich
+  lat: 47.3697
+  lng: 8.5386
+  canton: ZH
+
+- name: Bundeshaus Bern
+  lat: 46.9466
+  lng: 7.4440
+  canton: BE
+
+- name: Bahnhofplatz Luzern
+  lat: 47.0503
+  lng: 8.3097
+  canton: LU
+
+- name: Altdorf Uri
+  lat: 46.8803
+  lng: 8.6444
+  canton: UR
+
+- name: Schwyz town
+  lat: 47.0207
+  lng: 8.6531
+  canton: SZ
+
+- name: Sarnen Obwalden
+  lat: 46.8956
+  lng: 8.2459
+  canton: OW
+
+- name: Stans Nidwalden
+  lat: 46.9564
+  lng: 8.3660
+  canton: NW
+
+- name: Glarus town
+  lat: 47.0411
+  lng: 9.0681
+  canton: GL
+
+- name: Zug center
+  lat: 47.1671
+  lng: 8.5149
+  canton: ZG
+
+- name: Fribourg city
+  lat: 46.8066
+  lng: 7.1613
+  canton: FR
+
+- name: Solothurn Hauptgasse
+  lat: 47.2080
+  lng: 7.5377
+  canton: SO
+
+- name: Basel Muensterplatz
+  lat: 47.5608
+  lng: 7.5898
+  canton: BS
+
+- name: Liestal Basel-Landschaft
+  lat: 47.4844
+  lng: 7.7340
+  canton: BL
+
+- name: Schaffhausen
+  lat: 47.6969
+  lng: 8.6355
+  canton: SH
+
+- name: Herisau Appenzell Ausserrhoden
+  lat: 47.3856
+  lng: 9.2745
+  canton: AR
+
+- name: Appenzell town
+  lat: 47.3308
+  lng: 9.4100
+  canton: AI
+
+- name: St. Gallen Bahnhof
+  lat: 47.4235
+  lng: 9.3694
+  canton: SG
+
+- name: Chur Marktplatz
+  lat: 46.8498
+  lng: 9.5329
+  canton: GR
+
+- name: Aarau Rathaus
+  lat: 47.3925
+  lng: 8.0447
+  canton: AG
+
+- name: Frauenfeld Thurgau
+  lat: 47.5589
+  lng: 8.8986
+  canton: TG
+
+- name: Piazza Grande Locarno
+  lat: 46.1700
+  lng: 8.7990
+  canton: TI
+
+- name: Place Palud Lausanne
+  lat: 46.5209
+  lng: 6.6327
+  canton: VD
+
+- name: Sion Cathedrale
+  lat: 46.2341
+  lng: 7.3598
+  canton: VS
+
+- name: Neuchatel Chateau
+  lat: 46.9921
+  lng: 6.9280
+  canton: NE
+
+- name: Gare Cornavin Geneva
+  lat: 46.2103
+  lng: 6.1429
+  canton: GE
+
+- name: Delemont Jura
+  lat: 47.3664
+  lng: 7.3444
+  canton: JU
