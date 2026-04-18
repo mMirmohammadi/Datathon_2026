@@ -4,6 +4,9 @@
 __pycache__/
 *.pyc
 
+.env
+.env.local
+
 raw_data/
 data/
 *.db
