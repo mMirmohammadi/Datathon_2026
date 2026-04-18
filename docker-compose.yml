@@ -1,0 +1,29 @@
+services:
+  api:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    environment:
+      LISTINGS_RAW_DATA_DIR: /app/raw_data
+      LISTINGS_DB_PATH: /data/listings.db
+    volumes:
+      - listings_data:/data
+      - .:/app
+  mcp:
+    build:
+      context: .
+    command: uvicorn apps_sdk.server.main:app --host 0.0.0.0 --port 8001
+    environment:
+      APPS_SDK_LISTINGS_API_BASE_URL: http://api:8000
+      APPS_SDK_PUBLIC_BASE_URL: http://localhost:8001
+      APPS_SDK_PORT: 8001
+    ports:
+      - "8001:8001"
+    depends_on:
+      - api
+    volumes:
+      - .:/app
+
+volumes:
+  listings_data:

@@ -1,0 +1,23 @@
+{
+  "name": "datathon2026-apps-sdk-widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite dev --host",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "maplibre-gl": "^5.13.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.8"
+  }
+}
