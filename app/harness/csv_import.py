@@ -51,12 +51,27 @@ def create_schema(connection: sqlite3.Connection) -> None:
             features_json TEXT NOT NULL,
             offer_type TEXT,
             object_category TEXT,
+            object_category_raw TEXT,
             object_type TEXT,
             original_url TEXT,
             images_json TEXT,
             location_address_json TEXT,
             orig_data_json TEXT,
             raw_json TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS listings_fts USING fts5(
+            title,
+            description,
+            street,
+            city,
+            object_category_raw,
+            content='listings',
+            content_rowid='rowid',
+            tokenize='unicode61 remove_diacritics 2'
         )
         """
     )

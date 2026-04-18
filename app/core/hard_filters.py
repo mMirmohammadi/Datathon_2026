@@ -32,6 +32,7 @@ class HardFilterParams:
     features: list[str] | None = None
     features_excluded: list[str] | None = None
     object_category: list[str] | None = None
+    bm25_keywords: list[str] | None = None
     limit: int = 20
     offset: int = 0
     sort_by: str | None = None
@@ -58,6 +59,24 @@ def _normalize_list(values: list[str] | None) -> list[str] | None:
         return None
     cleaned = [value.strip() for value in values if value and value.strip()]
     return cleaned or None
+
+
+_FTS_NO_MATCH_SCORE = 1e9
+
+
+def _build_fts_match(keywords: list[str] | None) -> str | None:
+    if not keywords:
+        return None
+    cleaned: list[str] = []
+    for keyword in keywords:
+        if not keyword:
+            continue
+        stripped = keyword.replace('"', "").strip()
+        if stripped:
+            cleaned.append(stripped)
+    if not cleaned:
+        return None
+    return " OR ".join(f'"{keyword}"' for keyword in cleaned)
 
 
 def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, Any]]:
@@ -146,8 +165,9 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
             if column_name:
                 where_clauses.append(f"{column_name} = 0")
 
-    query = """
-        SELECT
+    fts_match = _build_fts_match(filters.bm25_keywords)
+
+    select_cols = """
             listing_id,
             title,
             description,
@@ -176,13 +196,30 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
             object_type,
             original_url,
             images_json
-        FROM listings
     """
+
+    if fts_match is not None:
+        query = f"""
+            SELECT {select_cols},
+                COALESCE(fts.bm25_score, {_FTS_NO_MATCH_SCORE}) AS bm25_score
+            FROM listings
+            LEFT JOIN (
+                SELECT rowid, bm25(listings_fts) AS bm25_score
+                FROM listings_fts
+                WHERE listings_fts MATCH ?
+            ) fts ON fts.rowid = listings.rowid
+        """
+        params = [fts_match, *params]
+    else:
+        query = f"SELECT {select_cols} FROM listings"
 
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
 
-    query += " ORDER BY " + _sort_clause(filters.sort_by)
+    if fts_match is not None:
+        query += " ORDER BY bm25_score ASC, listing_id ASC"
+    else:
+        query += " ORDER BY " + _sort_clause(filters.sort_by)
 
     with get_connection(db_path) as connection:
         rows = connection.execute(query, params).fetchall()

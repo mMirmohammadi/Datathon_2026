@@ -66,12 +66,13 @@ def test_happy_path_populates_new_and_old_fields(monkeypatch: pytest.MonkeyPatch
                 "features": ["balcony"],
                 "features_excluded": ["fireplace"],
                 "object_category": ["apartment"],
+                "bm25_keywords": ["Minergie", "modern"],
             }
         )
     )
     _install_client(monkeypatch, client)
 
-    result = extract_hard_facts("3-3.5 rooms in Zurich, min 70m^2, balcony, no fireplace, from June, modern")
+    result = extract_hard_facts("3-3.5 rooms in Zurich, min 70m^2, balcony, no fireplace, from June, modern Minergie")
 
     assert isinstance(result, HardFilters)
     assert result.city == ["zurich"]
@@ -86,6 +87,7 @@ def test_happy_path_populates_new_and_old_fields(monkeypatch: pytest.MonkeyPatch
     assert result.features == ["balcony"]
     assert result.features_excluded == ["fireplace"]
     assert result.object_category == ["apartment"]
+    assert result.bm25_keywords == ["Minergie", "modern"]
     assert len(client.calls) == 1
     assert client.calls[0]["model"] == "gpt-4o-mini"
     assert client.calls[0]["response_format"]["type"] == "json_schema"
@@ -190,9 +192,17 @@ class TestSchema:
         for field in (
             "min_area", "max_area", "min_floor", "max_floor",
             "min_year_built", "max_year_built", "available_from_after",
+            "bm25_keywords",
         ):
             assert field in props, f"missing {field}"
             assert field in _HARD_FILTERS_SCHEMA["schema"]["required"]
+
+    def test_bm25_keywords_is_nullable_string_array(self) -> None:
+        props = _HARD_FILTERS_SCHEMA["schema"]["properties"]
+        field = props["bm25_keywords"]
+        assert "null" in field["type"]
+        assert "array" in field["type"]
+        assert field["items"]["type"] == "string"
 
 
 # ---------- prompt pins ----------
@@ -208,6 +218,10 @@ class TestSystemPrompt:
         assert "commute" in SYSTEM_PROMPT.lower() or "min zum hb" in SYSTEM_PROMPT.lower()
         assert "family-friendly" in SYSTEM_PROMPT.lower()
         assert "modern" in SYSTEM_PROMPT.lower()
+
+    def test_contains_bm25_rule(self) -> None:
+        assert "BM25_KEYWORDS" in SYSTEM_PROMPT
+        assert "Minergie" in SYSTEM_PROMPT
 
     def test_contains_both_few_shot_examples(self) -> None:
         assert "3-room bright apartment in Zurich" in SYSTEM_PROMPT

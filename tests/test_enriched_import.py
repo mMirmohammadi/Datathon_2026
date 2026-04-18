@@ -97,6 +97,42 @@ def test_object_category_is_english_canonical(loaded_db: Path) -> None:
     assert not any("Haus" in c for c in categories)
 
 
+def test_object_category_raw_keeps_german(loaded_db: Path) -> None:
+    with sqlite3.connect(loaded_db) as conn:
+        raw_categories = {
+            row[0]
+            for row in conn.execute(
+                "SELECT DISTINCT object_category_raw FROM listings "
+                "WHERE object_category_raw IS NOT NULL"
+            ).fetchall()
+        }
+    assert "Wohnung" in raw_categories
+    assert "Haus" in raw_categories or "Dachwohnung" in raw_categories
+
+
+def test_fts_index_is_rebuilt_after_import(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    # Full bootstrap path (includes FTS rebuild) — separate DB so the module
+    # fixture stays isolated.
+    from app.harness.bootstrap import bootstrap_database
+
+    db_path = tmp_path_factory.mktemp("fts_boot") / "listings.db"
+    repo_root = Path(__file__).resolve().parents[1]
+    bootstrap_database(db_path=db_path, raw_data_dir=repo_root / "raw_data")
+
+    with sqlite3.connect(db_path) as conn:
+        table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'listings_fts'"
+        ).fetchone()
+        assert table is not None, "listings_fts virtual table missing"
+
+        count = conn.execute(
+            "SELECT COUNT(*) FROM listings_fts WHERE listings_fts MATCH 'Wohnung'"
+        ).fetchone()[0]
+    assert count > 0, "FTS index returned no matches for a common German term"
+
+
 def test_postal_code_stored_as_integer(loaded_db: Path) -> None:
     with sqlite3.connect(loaded_db) as conn:
         row = conn.execute(

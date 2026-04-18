@@ -122,6 +122,7 @@ def _normalize_row(raw: dict[str, str]) -> dict[str, Any]:
         "features_json": _build_features_json(feature_flags),
         "offer_type": _coerce_offer_type(raw.get("offer_type")),
         "object_category": translate_object_category(raw.get("object_category")),
+        "object_category_raw": (raw.get("object_category") or None),
         "object_type": (raw.get("object_type") or None),
         "original_url": (raw.get("original_url") or None),
         "raw_json": json.dumps(raw, ensure_ascii=False),
@@ -134,8 +135,8 @@ _INSERT_COLUMNS = [
     "price", "rooms", "area", "floor", "year_built", "available_from",
     "latitude", "longitude",
     *FEATURE_COLUMNS,
-    "features_json", "offer_type", "object_category", "object_type",
-    "original_url", "raw_json",
+    "features_json", "offer_type", "object_category", "object_category_raw",
+    "object_type", "original_url", "raw_json",
 ]
 
 
