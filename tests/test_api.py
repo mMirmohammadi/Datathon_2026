@@ -1,7 +1,10 @@
 import os
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+
+from app.models.schemas import HardFilters
 
 
 def test_health_endpoint(tmp_path: Path) -> None:
@@ -18,10 +21,18 @@ def test_health_endpoint(tmp_path: Path) -> None:
     assert response.json()["status"] == "ok"
 
 
-def test_post_listings_returns_ranked_results(tmp_path: Path) -> None:
+def test_post_listings_returns_ranked_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     os.environ["LISTINGS_RAW_DATA_DIR"] = str(repo_root / "raw_data")
     os.environ["LISTINGS_DB_PATH"] = str(tmp_path / "listings.db")
+
+    from app.harness import search_service
+
+    monkeypatch.setattr(
+        search_service, "extract_hard_facts", lambda q: HardFilters()
+    )
 
     from app.main import app
 

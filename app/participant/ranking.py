@@ -30,7 +30,7 @@ def _to_listing_data(candidate: dict[str, Any]) -> ListingData:
         description=candidate.get("description"),
         street=candidate.get("street"),
         city=candidate.get("city"),
-        postal_code=candidate.get("postal_code"),
+        postal_code=_coerce_str(candidate.get("postal_code")),
         canton=candidate.get("canton"),
         latitude=candidate.get("latitude"),
         longitude=candidate.get("longitude"),
@@ -55,6 +55,12 @@ def _coerce_int(value: Any) -> int | None:
         return int(round(float(value)))
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 def _coerce_image_urls(value: Any) -> list[str] | None:

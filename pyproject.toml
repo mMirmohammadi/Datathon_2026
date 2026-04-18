@@ -13,6 +13,8 @@ dependencies = [
     "reverse_geocoder>=1.5.1",
     "pyyaml>=6.0",
     "rapidfuzz>=3.9",
+    "openai>=1.50",
+    "python-dotenv>=1.0",
 ]
 
 [dependency-groups]

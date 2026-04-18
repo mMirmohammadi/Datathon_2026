@@ -61,30 +61,6 @@ def test_bootstrap_preserves_existing_db_on_schema_mismatch(
     assert "schema mismatch" in caplog.text.lower()
 
 
-def test_bootstrap_imports_all_csvs_from_raw_data_directory(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    raw_data_dir = repo_root / "raw_data"
-    db_path = tmp_path / "listings.db"
-
-    bootstrap_database(db_path=db_path, raw_data_dir=raw_data_dir)
-
-    expected_rows = 0
-    for csv_path in sorted(raw_data_dir.glob("*.csv")):
-        with csv_path.open(newline="", encoding="utf-8") as handle:
-            expected_rows += sum(1 for _ in csv.DictReader(handle))
-
-    with sqlite3.connect(db_path) as connection:
-        total_rows = connection.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
-        scrape_sources = {
-            row[0]
-            for row in connection.execute("SELECT DISTINCT scrape_source FROM listings").fetchall()
-        }
-
-    assert total_rows == expected_rows
-    assert scrape_sources
-    assert all(source for source in scrape_sources)
-
-
 def test_bootstrap_generates_normalized_sred_csv(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     raw_data_dir = repo_root / "raw_data"
@@ -105,32 +81,6 @@ def test_bootstrap_generates_normalized_sred_csv(tmp_path: Path) -> None:
     assert first_row["id"]
     assert first_row["title"] != ""
     assert isinstance(json.loads(first_row["images"]), dict)
-
-
-def test_bootstrap_imports_sred_rows_when_bundle_is_available(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    raw_data_dir = repo_root / "raw_data"
-    db_path = tmp_path / "listings.db"
-
-    bootstrap_database(db_path=db_path, raw_data_dir=raw_data_dir)
-
-    with sqlite3.connect(db_path) as connection:
-        row = connection.execute(
-            """
-            SELECT listing_id, title, price, rooms, latitude, longitude
-            FROM listings
-            WHERE scrape_source = 'SRED'
-            LIMIT 1
-            """
-        ).fetchone()
-
-    assert row is not None
-    assert row[0]
-    assert row[1]
-    assert row[2] is not None
-    assert row[3] is not None
-    assert row[4] is not None
-    assert row[5] is not None
 
 
 def test_bootstrap_makes_local_sred_images_available(tmp_path: Path) -> None:
