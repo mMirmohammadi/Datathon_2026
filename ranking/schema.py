@@ -200,6 +200,63 @@ INDEX_SQL: list[str] = [
 ]
 
 
+# ----------------------------------------------------------------------------
+# Companion long-table: per-(listing, landmark) real transit commute time.
+# Lives in the same DB file alongside `listings_ranking_signals` but as a
+# separate table so we can have arbitrarily many landmarks without schema
+# churn on the signals table. Populated by `t4_r5_commute_matrix.py`.
+# ----------------------------------------------------------------------------
+
+COMMUTE_TIMES_TABLE = "listing_commute_times"
+
+
+def create_commute_times_sql() -> str:
+    """DDL for the companion long table produced by t4_r5_commute_matrix.py.
+
+    Contract:
+      * PK (listing_id, landmark_key) — exactly one row per pair.
+      * travel_min INTEGER NULL — NULL means r5py couldn't reach the
+        destination within the configured max_time (currently 90 min).
+      * Secondary index on (landmark_key, travel_min) so
+        `WHERE landmark_key=? AND travel_min<=?` is a fast prefix scan.
+    """
+    return f"""
+CREATE TABLE IF NOT EXISTS {COMMUTE_TIMES_TABLE} (
+    listing_id   TEXT NOT NULL,
+    landmark_key TEXT NOT NULL,
+    travel_min   INTEGER,
+    PRIMARY KEY (listing_id, landmark_key)
+);
+"""
+
+
+COMMUTE_TIMES_INDEX_SQL: list[str] = [
+    # Fast "listings within N minutes of X" prefix scan for the ranker.
+    f"CREATE INDEX IF NOT EXISTS idx_lct_landmark_time ON {COMMUTE_TIMES_TABLE} (landmark_key, travel_min);",
+]
+
+
+def check_commute_times_schema(conn) -> None:
+    """Drift check for the commute-times companion table.
+
+    Returns silently if the table is missing (that's valid — t4 hasn't
+    been run). Raises if the table exists but has the wrong column shape.
+    """
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (COMMUTE_TIMES_TABLE,),
+    ).fetchone()
+    if row is None:
+        return  # table not yet created — that's fine, t4 will CREATE it.
+    expected = {"listing_id", "landmark_key", "travel_min"}
+    actual = {r[1] for r in conn.execute(f"PRAGMA table_info({COMMUTE_TIMES_TABLE});").fetchall()}
+    if actual != expected:
+        raise RuntimeError(
+            f"Schema drift on {COMMUTE_TIMES_TABLE}: expected columns={sorted(expected)}, "
+            f"got={sorted(actual)}. Drop + re-run t4_r5_commute_matrix.py."
+        )
+
+
 def signal_names() -> list[str]:
     """Every column name in registry order (excluding the PK)."""
     return [s.name for s in SIGNALS]

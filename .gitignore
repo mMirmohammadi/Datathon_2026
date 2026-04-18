@@ -40,4 +40,7 @@ sample_data_enriched/
 # Claude Code local settings + scheduler state (machine-local).
 .claude/
 
+# Ad-hoc zip archives of _context/ for out-of-band hand-off to colleagues.
+_context*.zip
+
 report.md
