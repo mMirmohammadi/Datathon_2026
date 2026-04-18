@@ -105,7 +105,16 @@ MAX_TIME = dt.timedelta(minutes=90)
 # --- filter / parallelism config --------------------------------------------
 
 HAVERSINE_CUTOFF_KM = float(os.getenv("T4_HAVERSINE_CUTOFF_KM", "40.0"))
-DEFAULT_WORKERS = int(os.getenv("T4_WORKERS", str(min(8, os.cpu_count() or 4))))
+# 4-worker default. Each r5py JVM defaults to `-Xmx = 80% of TOTAL RAM`
+# (see r5py/util/memory_footprint.py). With N processes this over-commits
+# RAM by Nx → thrashing / OOM. We explicitly cap each worker's JVM heap
+# via R5_MAX_MEMORY_PER_WORKER ("3G" default) so the math is:
+#   N_workers × (JVM heap + Kryo overhead ~1.5G) + python ~0.5G ≈ safe.
+# With defaults: 4 × 4.5 G ≈ 18 GB — comfortable on a 62 GB box.
+DEFAULT_WORKERS = int(os.getenv("T4_WORKERS", str(min(4, os.cpu_count() or 4))))
+# Hard cap for the JVM heap per worker. See _worker_compute_chunk for how
+# this is passed to r5py (via sys.argv before the r5py import).
+MAX_MEMORY_PER_WORKER = os.getenv("R5_MAX_MEMORY_PER_WORKER", "10G")
 
 # --- GTFS cleaner (unchanged) ----------------------------------------------
 
@@ -362,6 +371,7 @@ def _worker_compute_chunk(
     osm_path_str: str,
     departure: dt.datetime,
     max_time_sec: int,
+    max_memory: str,
 ) -> list[tuple[str, str, int | None]]:
     """Runs inside a worker process. Builds a local TransportNetwork (reads
     the Kryo cache once) and computes the travel-time matrix for this chunk
@@ -369,7 +379,16 @@ def _worker_compute_chunk(
     travel_min_or_None) tuples.
 
     Why tuples not a DataFrame: cross-process pickling is cheaper on lists.
+
+    `max_memory`: JVM -Xmx ceiling (e.g. "3G"). r5py reads it from
+    `sys.argv` via configargparse `--max-memory`. Without this cap each
+    JVM grabs 80% of TOTAL system RAM — N workers × that = OOM thrashing.
+    We injecting the CLI arg into `sys.argv` BEFORE importing r5py.
     """
+    import sys as _sys
+    # Must land in sys.argv before `import r5py` triggers its configargparse.
+    _sys.argv = [_sys.argv[0], "--max-memory", max_memory]
+
     import geopandas as _gpd
     import shapely.geometry as _sg
     import pandas as _pd
@@ -482,6 +501,7 @@ def _compute_matrix_parallel(
                 str(OSM_PBF_PATH),
                 DEPARTURE_TIME,
                 int(MAX_TIME.total_seconds()),
+                MAX_MEMORY_PER_WORKER,
             )
             futures.append(fut)
 
