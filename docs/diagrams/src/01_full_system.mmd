@@ -1,0 +1,93 @@
+flowchart TB
+    subgraph OFFLINE["⚙️  OFFLINE ENRICHMENT · runs once at docker compose up"]
+        direction TB
+        subgraph INGEST["📥 Ingestion (harness-owned — keep untouched)"]
+            direction LR
+            C1[robinreal<br/>797]
+            C2[structured<br/>withimages<br/>4,160]
+            C3[structured<br/>withoutimages<br/>6,757]
+            C4[sred<br/>11,105]
+        end
+        INGEST --> NORM[csv_import.py<br/>normalize · 42 cols · 12 feature flags]
+        NORM --> DB[(listings.db<br/>SQLite · 7 indexes)]
+
+        subgraph ENRICH["🌱 Participant-owned enrichment → listings_enriched side-table"]
+            direction TB
+            G1[reverse_geocoder<br/>SRED city+canton<br/>11 k rows · ~30 s]
+            G2["regex + NegEx<br/>DE · FR · IT · EN<br/>features from text<br/>12 flags × 22 k rows"]
+            G3[Arctic-Embed-L v2<br/>doc embeddings<br/>22 k × 256-d MRL]
+            G4[SigLIP-2 base<br/>image quality scores<br/>5 dims × 30 k images]
+            G5[SBB GTFS<br/>→ BallTree<br/>dist_station_m]
+            G6[GTFS stop_times<br/>Dijkstra<br/>→ landmark travel-time]
+            G7[Wikidata SPARQL<br/>CH landmarks gazetteer]
+        end
+
+        DB --> G1 & G2 & G3 & G4 & G5
+        G5 --> G6
+        G1 --> AUX[(listings_enriched<br/>side-table · INSERT OR REPLACE)]
+        G2 --> AUX
+        G3 --> EMB_NPY[embeddings.npy<br/>~22 MB numpy matrix]
+        G4 --> AUX
+        G5 --> AUX
+        G6 --> LM_JSON[landmarks.json<br/>travel-time table]
+        G7 --> LM_JSON
+    end
+
+    subgraph QUERY["🔎 QUERY TIME · per request · p50 &lt; 2.5 s"]
+        direction TB
+        Q[/"User query<br/>DE · FR · IT · EN"/]
+
+        subgraph QU["1️⃣  Query understanding"]
+            CLAUDE[Claude Sonnet 4.6<br/>forced tool-use<br/>strict:true · cached prompt]
+            PLAN[["QueryPlan<br/>─────────<br/>hard · soft<br/>landmarks · rewrites<br/>clarification?"]]
+        end
+
+        subgraph RET["2️⃣  Retrieval · SQL as GATE"]
+            direction TB
+            GATE{{"🚧 SQL hard-filter GATE<br/>hard_filters.search_listings<br/>— violators removed —"}}
+            BM25[FTS5 BM25<br/>keywords + rewrites<br/>top 150]
+            DENSE[Arctic-Embed-L<br/>query vector<br/>cosine over allowed set<br/>top 150]
+            FUSE[Reciprocal Rank Fusion<br/>k=60 → top 50]
+        end
+
+        subgraph RR["3️⃣  Rerank + score"]
+            CE[bge-reranker-v2-m3<br/>cross-encoder · top 50]
+            BLEND[Linear blend<br/>8 signals<br/>percentile-normalized]
+            PERS{Session?}
+            BOOST[+ personalization<br/>boost cap +0.2]
+        end
+
+        subgraph EXP["4️⃣  Explain + respond"]
+            TEMPL[Template reasons<br/>per top-10]
+            RESP[["ListingsResponse<br/>─────────<br/>listings[] · score · reason<br/>meta{filters, relaxations,<br/>warnings}"]]
+        end
+
+        Q --> CLAUDE --> PLAN
+        PLAN --> GATE
+        GATE --> BM25
+        GATE --> DENSE
+        BM25 --> FUSE
+        DENSE --> FUSE
+        FUSE --> CE
+        CE --> BLEND
+        BLEND --> PERS
+        PERS -- yes --> BOOST --> TEMPL
+        PERS -- no --> TEMPL
+        TEMPL --> RESP
+    end
+
+    AUX -.used at query time.-> GATE
+    AUX -.signals.-> BLEND
+    EMB_NPY -.loaded at startup.-> DENSE
+    LM_JSON -.used at parse.-> CLAUDE
+    LM_JSON -.commute signal.-> BLEND
+
+    classDef gate fill:#fee,stroke:#c00,stroke-width:3px,color:#900
+    classDef ml fill:#eef,stroke:#44c,color:#228
+    classDef data fill:#ffe,stroke:#b80,color:#850
+    classDef out fill:#efe,stroke:#090,color:#060
+
+    class GATE gate
+    class CLAUDE,DENSE,CE,G3,G4 ml
+    class DB,AUX,EMB_NPY,LM_JSON data
+    class RESP,PLAN out

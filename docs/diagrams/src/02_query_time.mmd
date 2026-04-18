@@ -1,0 +1,27 @@
+flowchart LR
+    Q[/"Bright 3-room<br/>in Zurich<br/>under 2800 CHF<br/>with balcony"/]
+
+    Q --> P1[query_plan.py<br/>─────────<br/>Claude Sonnet 4.6<br/>tool_choice: emit_query_plan<br/>strict: true<br/>5 s timeout → regex]
+
+    P1 --> QP[["QueryPlan<br/>hard: rooms=3, city=zurich,<br/>max_chf=2800, balcony=required<br/>soft: bright<br/>rewrites: [...]"]]
+
+    QP --> R1[hard_filters.<br/>search_listings<br/>★ the GATE ★]
+    QP --> R2[retrieval.<br/>bm25_candidates]
+    QP --> R3[retrieval.<br/>embedding_candidates]
+
+    R1 -.allowed set.-> R2
+    R1 -.allowed set.-> R3
+
+    R2 --> F[retrieval.fuse<br/>RRF k=60<br/>top 50]
+    R3 --> F
+
+    F --> RR[ranking.rerank<br/>bge-reranker-v2-m3]
+    RR --> SC[ranking.score<br/>────────────<br/>0.30 · rerank<br/>+ 0.15 · BM25<br/>+ 0.10 · dense<br/>+ 0.10 · feature<br/>+ 0.10 · price<br/>+ 0.08 · geo<br/>+ 0.07 · image<br/>+ 0.05 · fresh<br/>− 0.15 · negatives]
+
+    SC --> EX[explain.<br/>render_reason]
+    EX --> OUT[/"Top 10<br/>+ reasons<br/>+ meta"/]
+
+    classDef gate fill:#fee,stroke:#c00,stroke-width:3px
+    classDef ml fill:#eef,stroke:#44c
+    class R1 gate
+    class P1,R3,RR ml

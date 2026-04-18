@@ -1,0 +1,25 @@
+flowchart TB
+    START[Hard-filter result]
+    ZERO{count = 0?}
+    R1[Relax price ±10%]
+    R2[Drop city, keep canton]
+    R3[Drop canton]
+    R4[Expand radius ×1.5]
+    R5[Drop features least-frequent-first]
+    DONE[Return with<br/>meta.relaxations<br/>annotated]
+    OK[Return normally]
+
+    START --> ZERO
+    ZERO -- no --> OK
+    ZERO -- yes --> R1 --> C1{count ≥ 5?}
+    C1 -- yes --> DONE
+    C1 -- no --> R2 --> C2{count ≥ 5?}
+    C2 -- yes --> DONE
+    C2 -- no --> R3 --> C3{count ≥ 5?}
+    C3 -- yes --> DONE
+    C3 -- no --> R4 --> C4{count ≥ 5?}
+    C4 -- yes --> DONE
+    C4 -- no --> R5 --> DONE
+
+    classDef decision fill:#ffe,stroke:#b80
+    class ZERO,C1,C2,C3,C4 decision

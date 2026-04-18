@@ -1,0 +1,34 @@
+flowchart LR
+    subgraph S3["☁️  S3 bucket"]
+        S3C["prod/comparis/images/<br/>25,433 files · 3.54 GB"]
+        S3R["prod/robinreal/images/<br/>5,385 files · 0.82 GB"]
+    end
+
+    subgraph LOCAL["💾 raw_data/ (gitignored)"]
+        L1[robinreal_data_withimages.csv<br/>797 rows]
+        L2[structured_data_withimages.csv<br/>4,160 rows]
+        L3[structured_data_withoutimages.csv<br/>6,757 rows]
+        L4[sred_data_withmontageimages_latlong.csv<br/>11,105 rows]
+        LS[sred_images/<br/>11,105 montage JPEGs<br/>— shipped in zip]
+        LC[structured_data_images/<br/>— from S3]
+        LR[robinreal_images/<br/>— from S3]
+    end
+
+    S3C -->|aws s3 cp| LC
+    S3R -->|aws s3 cp| LR
+
+    L1 --> IMP[csv_import.py]
+    L2 --> IMP
+    L3 --> IMP
+    L4 --> IMP
+    IMP --> DB[(listings.db)]
+
+    LS -.SRED hero.-> SCR[enrich_images.py]
+    LC -.comparis hero.-> SCR
+    LR -.robinreal hero.-> SCR
+    SCR --> ENR[(listings_enriched)]
+
+    classDef source fill:#eef,stroke:#44c
+    classDef derived fill:#efe,stroke:#090
+    class L1,L2,L3,L4,LS source
+    class LC,LR,ENR,DB derived

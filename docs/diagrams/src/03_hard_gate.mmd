@@ -1,0 +1,23 @@
+flowchart TB
+    Q[QueryPlan.hard<br/>────────────<br/>rooms=3<br/>city=zurich<br/>max_chf=2800<br/>balcony=required]
+
+    Q --> GATE{{"SQL hard-filter GATE<br/>app/core/hard_filters.py<br/>search_listings( )"}}
+
+    GATE -- all rooms=3 AND<br/>city=zurich AND<br/>price≤2800 AND<br/>balcony=1 --> A[("ALLOWED set<br/>~150 listings")]
+
+    subgraph INNER["inside the gate"]
+        direction LR
+        BM[BM25<br/>keywords on<br/>ALLOWED set]
+        DE[dense<br/>cosine on<br/>ALLOWED set]
+        RRF[RRF fusion]
+        BM --> RRF
+        DE --> RRF
+    end
+
+    A --> INNER
+    INNER --> TOP[top 50 candidates<br/>every one is<br/>constraint-compliant]
+
+    classDef gate fill:#fee,stroke:#c00,stroke-width:3px,color:#900
+    classDef safe fill:#efe,stroke:#090,color:#060
+    class GATE gate
+    class A,TOP safe

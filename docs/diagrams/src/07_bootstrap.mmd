@@ -1,0 +1,30 @@
+sequenceDiagram
+    participant U as uvicorn startup
+    participant M as app/main.py
+    participant H as harness.bootstrap_database
+    participant P as participant.bootstrap_participant
+    participant DB as listings.db
+    participant FS as filesystem
+
+    U->>M: lifespan()
+    M->>H: bootstrap_database(db_path, raw_data_dir)
+    H->>H: ensure_sred_normalized_csv()
+    H->>DB: _schema_matches?
+    alt DB exists + schema ok
+        DB-->>H: ok, reuse
+    else DB missing
+        H->>DB: create_schema()
+        H->>DB: import_csvs()  (~22 k rows)
+        H->>DB: create_indexes()
+    end
+    H-->>M: done
+
+    M->>P: bootstrap_participant(db_path)
+    P->>DB: CREATE TABLE IF NOT EXISTS listings_enriched
+    P->>DB: CREATE VIRTUAL TABLE IF NOT EXISTS listings_fts
+    P->>DB: INSERT INTO listings_fts(listings_fts) VALUES('rebuild')
+    P->>FS: np.load('data/embeddings.npy')
+    P->>FS: json.load('data/cache/landmarks.json')
+    P-->>M: ready (module-global state)
+
+    M->>U: yield  (server accepts requests)

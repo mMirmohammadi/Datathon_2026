@@ -1,0 +1,29 @@
+flowchart LR
+    subgraph POS["Positive signals"]
+        direction TB
+        S1[Cross-encoder<br/>rerank percentile<br/>── 0.30 ──]
+        S2[BM25 percentile<br/>── 0.15 ──]
+        S3[Dense cos percentile<br/>── 0.10 ──]
+        S4[Feature match<br/>explicit OR text-derived<br/>── 0.10 ──]
+        S5[Price fit<br/>triangle on candidate<br/>pool percentiles<br/>── 0.10 ──]
+        S6["Geo / landmark fit<br/>exp(−d/3) or GTFS<br/>── 0.08 ──"]
+        S7[Image quality fit<br/>⟨targets, SigLIP-2⟩<br/>── 0.07 ──]
+        S8[Freshness<br/>linear on available_from<br/>── 0.05 ──]
+    end
+
+    subgraph NEG["Negative signals"]
+        S9[Negative penalty<br/>keyword hit OR flag<br/>── −0.15 ──]
+    end
+
+    POS --> SUM[Σ · weighted sum]
+    NEG --> SUM
+    SUM --> CLAMP[clamp to 0,1]
+    CLAMP --> PB{Session?}
+    PB -- yes --> PS["+ 0.1·cos(pref) + 0.05·feat_overlap<br/>cap +0.2"]
+    PB -- no --> FINAL[final score]
+    PS --> FINAL
+
+    classDef pos fill:#efe,stroke:#090
+    classDef neg fill:#fee,stroke:#c00
+    class S1,S2,S3,S4,S5,S6,S7,S8 pos
+    class S9 neg
