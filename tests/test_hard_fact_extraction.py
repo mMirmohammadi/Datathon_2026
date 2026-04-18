@@ -67,12 +67,26 @@ def test_happy_path_populates_new_and_old_fields(monkeypatch: pytest.MonkeyPatch
                 "features_excluded": ["fireplace"],
                 "object_category": ["apartment"],
                 "bm25_keywords": ["Minergie", "modern"],
+                "soft_preferences": {
+                    "price_sentiment": "cheap",
+                    "quiet": True,
+                    "near_public_transport": True,
+                    "near_schools": False,
+                    "near_supermarket": False,
+                    "near_park": False,
+                    "family_friendly": False,
+                    "commute_target": "zurich_hb",
+                    "near_landmark": ["ETH"],
+                },
             }
         )
     )
     _install_client(monkeypatch, client)
 
-    result = extract_hard_facts("3-3.5 rooms in Zurich, min 70m^2, balcony, no fireplace, from June, modern Minergie")
+    result = extract_hard_facts(
+        "3-3.5 rooms in Zurich, min 70m^2, balcony, no fireplace, from June, "
+        "modern Minergie, guenstig, ruhig, near ETH, max 25 Min zum HB"
+    )
 
     assert isinstance(result, HardFilters)
     assert result.city == ["zurich"]
@@ -88,6 +102,12 @@ def test_happy_path_populates_new_and_old_fields(monkeypatch: pytest.MonkeyPatch
     assert result.features_excluded == ["fireplace"]
     assert result.object_category == ["apartment"]
     assert result.bm25_keywords == ["Minergie", "modern"]
+    assert result.soft_preferences is not None
+    assert result.soft_preferences.price_sentiment == "cheap"
+    assert result.soft_preferences.quiet is True
+    assert result.soft_preferences.near_public_transport is True
+    assert result.soft_preferences.commute_target == "zurich_hb"
+    assert result.soft_preferences.near_landmark == ["ETH"]
     assert len(client.calls) == 1
     assert client.calls[0]["model"] == "gpt-4o-mini"
     assert client.calls[0]["response_format"]["type"] == "json_schema"
@@ -204,6 +224,31 @@ class TestSchema:
         assert "array" in field["type"]
         assert field["items"]["type"] == "string"
 
+    def test_soft_preferences_schema(self) -> None:
+        props = _HARD_FILTERS_SCHEMA["schema"]["properties"]
+        assert "soft_preferences" in props
+        assert "soft_preferences" in _HARD_FILTERS_SCHEMA["schema"]["required"]
+        sp = props["soft_preferences"]
+        assert "null" in sp["type"]
+        for key in (
+            "price_sentiment", "quiet", "near_public_transport", "near_schools",
+            "near_supermarket", "near_park", "family_friendly",
+            "commute_target", "near_landmark",
+        ):
+            assert key in sp["properties"], f"missing {key}"
+            assert key in sp["required"]
+
+    def test_soft_preferences_enums(self) -> None:
+        props = _HARD_FILTERS_SCHEMA["schema"]["properties"]
+        sp = props["soft_preferences"]["properties"]
+        assert set(x for x in sp["price_sentiment"]["enum"] if x) == {
+            "cheap", "moderate", "premium"
+        }
+        assert set(x for x in sp["commute_target"]["enum"] if x) == {
+            "zurich_hb", "bern_hb", "basel_hb", "geneve_hb",
+            "lausanne_hb", "lugano_hb", "winterthur_hb", "st_gallen_hb",
+        }
+
 
 # ---------- prompt pins ----------
 
@@ -222,6 +267,19 @@ class TestSystemPrompt:
     def test_contains_bm25_rule(self) -> None:
         assert "BM25_KEYWORDS" in SYSTEM_PROMPT
         assert "Minergie" in SYSTEM_PROMPT
+
+    def test_contains_soft_preferences_cue_table(self) -> None:
+        assert "SOFT_PREFERENCES" in SYSTEM_PROMPT
+        # Key tokens from the cue table must all appear verbatim in the prompt.
+        for token in (
+            "price_sentiment",
+            "quiet",
+            "near_public_transport",
+            "near_schools",
+            "commute_target",
+            "near_landmark",
+        ):
+            assert token in SYSTEM_PROMPT, f"missing cue-table entry: {token}"
 
     def test_contains_both_few_shot_examples(self) -> None:
         assert "3-room bright apartment in Zurich" in SYSTEM_PROMPT

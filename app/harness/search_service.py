@@ -4,46 +4,83 @@ from pathlib import Path
 from typing import Any
 
 from app.core.hard_filters import HardFilterParams, search_listings
+from app.core.soft_signals import build_soft_rankings
+from app.core.text_embed_search import (
+    is_loaded as text_embed_is_loaded,
+    score_candidates as text_embed_score_candidates,
+    text_embed_enabled,
+)
 from app.core.visual_search import (
-    fuse_rrf,
+    fuse_rankings,
     is_loaded as visual_is_loaded,
     score_candidates as visual_score_candidates,
     visual_enabled,
 )
-from app.models.schemas import HardFilters, ListingsResponse
+from app.models.schemas import HardFilters, ListingsResponse, SoftPreferences
 from app.participant.hard_fact_extraction import extract_hard_facts
 from app.participant.ranking import rank_listings
 from app.participant.soft_fact_extraction import extract_soft_facts
 from app.participant.soft_filtering import filter_soft_facts
 
 
-HYBRID_POOL = 100
+HYBRID_POOL = 300
 
 
 def filter_hard_facts(db_path: Path, hard_facts: HardFilters) -> list[dict[str, Any]]:
     return search_listings(db_path, to_hard_filter_params(hard_facts))
 
 
-def _rerank_hybrid(candidates: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
-    """Fuse BM25 order (input order of candidates) with SigLIP visual order via RRF.
+def _rerank_hybrid(
+    candidates: list[dict[str, Any]],
+    query: str,
+    soft: SoftPreferences | None,
+    db_path: Path,
+) -> list[dict[str, Any]]:
+    """Collect BM25 + visual + text_embed + per-soft rankings and fuse via RRF.
 
-    Mutates each candidate dict with `visual_score` and `rrf_score` keys,
-    returns the candidates list sorted by descending `rrf_score`. No-op when
-    visual search is disabled or the model has not been loaded.
+    Always mutates each candidate dict with ``rrf_score``; adds
+    ``visual_score`` / ``text_embed_score`` / ``soft_signals_activated`` when
+    the respective channels contributed. Sorts candidates by descending
+    ``rrf_score`` in place.
+
+    BM25 is always present (comes in via the input order). Visual and
+    text-embedding channels are each skipped when their env flag is off or
+    their index has not been loaded.
     """
-    if not candidates or not visual_enabled() or not visual_is_loaded():
+    if not candidates:
         return candidates
 
-    bm25_order = [str(c["listing_id"]) for c in candidates]
-    visual_scores = visual_score_candidates(query, candidates)
-    visual_order = sorted(
-        visual_scores.keys(), key=lambda listing_id: -visual_scores[listing_id]
-    )
-    fused = fuse_rrf(bm25_order, visual_order)
+    listing_ids = [str(c["listing_id"]) for c in candidates]
+    rankings: list[list[str]] = [listing_ids]  # BM25 channel (input order)
+
+    if visual_enabled() and visual_is_loaded():
+        visual_scores = visual_score_candidates(query, candidates)
+        rankings.append(
+            sorted(visual_scores.keys(), key=lambda lid: -visual_scores[lid])
+        )
+    else:
+        visual_scores = {}
+
+    if text_embed_enabled() and text_embed_is_loaded():
+        text_embed_scores = text_embed_score_candidates(query, candidates)
+        rankings.append(
+            sorted(text_embed_scores.keys(), key=lambda lid: -text_embed_scores[lid])
+        )
+    else:
+        text_embed_scores = {}
+
+    soft_rankings = build_soft_rankings(candidates, soft, db_path)
+    rankings.extend(soft_rankings)
+
+    fused = fuse_rankings(rankings)
+
     for candidate in candidates:
         listing_id = str(candidate["listing_id"])
         candidate["visual_score"] = visual_scores.get(listing_id)
+        candidate["text_embed_score"] = text_embed_scores.get(listing_id)
         candidate["rrf_score"] = fused.get(listing_id, 0.0)
+        candidate["soft_signals_activated"] = len(soft_rankings)
+
     candidates.sort(key=lambda c: -c["rrf_score"])
     return candidates
 
@@ -56,13 +93,13 @@ def query_from_text(
     offset: int,
 ) -> ListingsResponse:
     hard_facts = extract_hard_facts(query)
-    # Fetch a deeper pool so the RRF fusion has real material to re-rank;
-    # truncate to the requested window after fusion.
     hard_facts.limit = max(limit, HYBRID_POOL)
     hard_facts.offset = 0
     soft_facts = extract_soft_facts(query)
     candidates = filter_hard_facts(db_path, hard_facts)
-    candidates = _rerank_hybrid(candidates, query)
+    candidates = _rerank_hybrid(
+        candidates, query, hard_facts.soft_preferences, db_path
+    )
     candidates = candidates[offset : offset + limit]
     candidates = filter_soft_facts(candidates, soft_facts)
     return ListingsResponse(

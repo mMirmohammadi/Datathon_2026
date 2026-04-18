@@ -19,6 +19,13 @@ _CANTONS = [
     "NW", "OW", "SG", "SH", "SO", "SZ", "TG", "TI", "UR", "VD", "VS", "ZG", "ZH",
 ]
 
+_PRICE_SENTIMENTS = ["cheap", "moderate", "premium"]
+
+_COMMUTE_TARGETS = [
+    "zurich_hb", "bern_hb", "basel_hb", "geneve_hb",
+    "lausanne_hb", "lugano_hb", "winterthur_hb", "st_gallen_hb",
+]
+
 SYSTEM_PROMPT = f"""\
 You extract hard constraints from a Swiss real-estate search query in German,
 French, Italian, or English. Emit a single JSON object conforming to the schema.
@@ -82,19 +89,71 @@ Skip generic words already covered by the hard schema (apartment, Wohnung,
 house, city names, numbers, dates) and stopwords. Keep it short (<= 8 terms).
 If nothing useful remains, emit an empty list.
 
+SOFT_PREFERENCES: a structured object that activates ranking channels. Emit
+only keys explicitly hinted by the query. Cue table (cross-lingual):
+
+- "guenstig" / "nicht zu teuer" / "affordable" / "pas cher" / "economico" ->
+  soft_preferences.price_sentiment = "cheap"
+- "gehoben" / "luxurious" / "premium" / "haut de gamme" / "lusso" ->
+  soft_preferences.price_sentiment = "premium"
+- "ruhig" / "quiet" / "calme" / "tranquillo" / "nicht zu laut" ->
+  soft_preferences.quiet = true
+- "gut angebunden" / "nahe OeV" / "S-Bahn" / "near public transport" ->
+  soft_preferences.near_public_transport = true
+- "gute Schulen" / "near schools" / "ecoles" / "kinderfreundlich" ->
+  soft_preferences.near_schools = true
+- "familie" / "family" / "famille" / "famiglia" + cue ->
+  soft_preferences.family_friendly = true
+- "nahe Supermarkt" / "near supermarket" -> soft_preferences.near_supermarket = true
+- "nahe Park" / "near park" / "park nearby" -> soft_preferences.near_park = true
+- "max N min zum HB Zurich / Bern / Basel / Geneve / Lausanne / Luzern /
+   Winterthur / St. Gallen" -> soft_preferences.commute_target = "<city>_hb".
+   Also set near_public_transport = true (the commute relies on transit).
+- "nahe ETH" / "near EPFL" / "am Zuerichsee" / "nahe HB" ->
+  soft_preferences.near_landmark = ["<alias>"] (free text; the Python side
+  resolves aliases to canonical landmark keys).
+
+Do not activate a preference if the query does not explicitly hint at it.
+
 EXAMPLES:
 
 Query: "3-room bright apartment in Zurich under 2800 CHF with balcony, close to public transport"
-Output: {{"city":["zurich"],"min_rooms":3.0,"max_rooms":3.0,"max_price":2800,"features":["balcony"],"bm25_keywords":["bright"]}}
+Output: {{"city":["zurich"],"min_rooms":3.0,"max_rooms":3.0,"max_price":2800,"features":["balcony"],"bm25_keywords":["bright"],"soft_preferences":{{"near_public_transport":true}}}}
 
-Query: "Wohnung im Raum Zuerich oder Duebendorf, 2.5 bis 3.5 Zimmer, ab 70 m2, bis 3100 CHF, max 25 Min zu Stadelhofen, gern mit Balkon und Waschturm"
-Output: {{"city":["zurich","dubendorf"],"min_rooms":2.5,"max_rooms":3.5,"min_area":70,"max_price":3100,"features":["balcony","private_laundry"],"bm25_keywords":["Balkon","Waschturm","Stadelhofen"]}}
+Query: "Wohnung im Raum Zuerich oder Duebendorf, 2.5 bis 3.5 Zimmer, ab 70 m2, bis 3100 CHF, max 25 Min zum HB, guenstig und ruhig, nahe ETH"
+Output: {{"city":["zurich","dubendorf"],"min_rooms":2.5,"max_rooms":3.5,"min_area":70,"max_price":3100,"bm25_keywords":["Balkon","Waschturm"],"soft_preferences":{{"price_sentiment":"cheap","quiet":true,"near_public_transport":true,"commute_target":"zurich_hb","near_landmark":["ETH"]}}}}
 """
 
 
 def _nullable(type_: str | list[str], **extra) -> dict:
     t = type_ if isinstance(type_, list) else [type_, "null"]
     return {"type": t, **extra}
+
+
+_SOFT_PREFERENCES_SCHEMA = {
+    "type": ["object", "null"],
+    "additionalProperties": False,
+    "properties": {
+        "price_sentiment": _nullable(
+            ["string", "null"], enum=[*_PRICE_SENTIMENTS, None]
+        ),
+        "quiet": {"type": "boolean"},
+        "near_public_transport": {"type": "boolean"},
+        "near_schools": {"type": "boolean"},
+        "near_supermarket": {"type": "boolean"},
+        "near_park": {"type": "boolean"},
+        "family_friendly": {"type": "boolean"},
+        "commute_target": _nullable(
+            ["string", "null"], enum=[*_COMMUTE_TARGETS, None]
+        ),
+        "near_landmark": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "price_sentiment", "quiet", "near_public_transport", "near_schools",
+        "near_supermarket", "near_park", "family_friendly",
+        "commute_target", "near_landmark",
+    ],
+}
 
 
 _HARD_FILTERS_SCHEMA = {
@@ -131,6 +190,7 @@ _HARD_FILTERS_SCHEMA = {
                 items={"type": "string", "enum": OBJECT_CATEGORY_ENGLISH},
             ),
             "bm25_keywords": _nullable(["array", "null"], items={"type": "string"}),
+            "soft_preferences": _SOFT_PREFERENCES_SCHEMA,
         },
         "required": [
             "city", "postal_code", "canton",
@@ -138,7 +198,7 @@ _HARD_FILTERS_SCHEMA = {
             "min_area", "max_area", "min_floor", "max_floor",
             "min_year_built", "max_year_built", "available_from_after",
             "features", "features_excluded", "object_category",
-            "bm25_keywords",
+            "bm25_keywords", "soft_preferences",
         ],
     },
 }

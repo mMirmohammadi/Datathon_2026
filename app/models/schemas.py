@@ -6,6 +6,29 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class SoftPreferences(BaseModel):
+    """Soft ranking signals extracted from the user query.
+
+    The ranker (``app/core/soft_signals.py``) turns every activated key into
+    its own listing ranking that is then fused via RRF with the BM25, text-
+    embedding and image-embedding channels. NULL signals are omitted from
+    their ranking (they neither help nor hurt the listing on that axis).
+    """
+
+    price_sentiment: Literal["cheap", "moderate", "premium"] | None = None
+    quiet: bool = False
+    near_public_transport: bool = False
+    near_schools: bool = False
+    near_supermarket: bool = False
+    near_park: bool = False
+    family_friendly: bool = False
+    commute_target: Literal[
+        "zurich_hb", "bern_hb", "basel_hb", "geneve_hb",
+        "lausanne_hb", "lugano_hb", "winterthur_hb", "st_gallen_hb",
+    ] | None = None
+    near_landmark: list[str] = Field(default_factory=list)
+
+
 class HardFilters(BaseModel):
     city: list[str] | None = None
     postal_code: list[str] | None = None
@@ -28,6 +51,7 @@ class HardFilters(BaseModel):
     features_excluded: list[str] | None = None
     object_category: list[str] | None = None
     bm25_keywords: list[str] | None = None
+    soft_preferences: SoftPreferences | None = None
     limit: int = Field(default=20, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
     sort_by: Literal["price_asc", "price_desc", "rooms_asc", "rooms_desc"] | None = None

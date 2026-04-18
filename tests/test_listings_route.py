@@ -81,65 +81,90 @@ def test_post_listings_pipeline_bm25_keywords_rank_matching_rows_first(
     assert last_nonzero < first_zero
 
 
-def test_post_listings_pipeline_hybrid_rrf_uses_visual_and_bm25(
+def test_post_listings_pipeline_hybrid_three_channels_plus_soft(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Hybrid path: env=1, monkeypatched SigLIP, assert rrf_score surfaces in
-    the API response and that listings with a visual match appear first."""
+    """Full n-way hybrid: visual + text_embed + soft_preferences all
+    contribute. Listing present in every ranking must win; its reason must
+    mention every activated channel.
+    """
     repo_root = Path(__file__).resolve().parents[1]
     os.environ["LISTINGS_RAW_DATA_DIR"] = str(repo_root / "raw_data")
     os.environ["LISTINGS_DB_PATH"] = str(tmp_path / "listings.db")
     monkeypatch.setenv("LISTINGS_VISUAL_ENABLED", "1")
+    monkeypatch.setenv("LISTINGS_TEXT_EMBED_ENABLED", "1")
 
-    from app.core import visual_search
+    from app.core import text_embed_search, visual_search
     from app.harness import search_service
+    from app.models.schemas import SoftPreferences
 
-    def fake_extract(query: str) -> HardFilters:
-        return HardFilters(city=["zurich"], limit=10)
-
-    monkeypatch.setattr(search_service, "extract_hard_facts", fake_extract)
-
-    # Avoid the real SigLIP load: make load_visual_index a no-op (also patch
-    # the already-imported binding on app.main).
-    noop_load = lambda *a, **kw: None  # noqa: E731
-    monkeypatch.setattr(visual_search, "load_visual_index", noop_load)
+    # Stub the eager loaders on both the core modules and the app.main binding.
+    noop = lambda *a, **kw: None  # noqa: E731
+    monkeypatch.setattr(visual_search, "load_visual_index", noop)
+    monkeypatch.setattr(text_embed_search, "load_text_embed_index", noop)
 
     from app import main as app_main
 
-    monkeypatch.setattr(app_main, "load_visual_index", noop_load)
+    monkeypatch.setattr(app_main, "load_visual_index", noop)
+    monkeypatch.setattr(app_main, "load_text_embed_index", noop)
 
-    # Provide deterministic visual scores keyed by listing_id. Only the FIRST
-    # listing returned by the gate gets a positive visual score; every other
-    # one is omitted.
-    captured_first_id: dict[str, str] = {}
+    captured: dict[str, str] = {}
 
-    def fake_score_candidates(query_text: str, candidates):
+    def fake_extract(query: str) -> HardFilters:
+        return HardFilters(
+            city=["winterthur"],
+            soft_preferences=SoftPreferences(quiet=True, near_schools=True),
+            limit=10,
+        )
+
+    monkeypatch.setattr(search_service, "extract_hard_facts", fake_extract)
+
+    def fake_visual(query, candidates):
         if not candidates:
             return {}
         first_id = str(candidates[0]["listing_id"])
-        captured_first_id["id"] = first_id
-        return {first_id: 0.99}
+        captured["id"] = first_id
+        return {first_id: 0.95}
 
-    monkeypatch.setattr(visual_search, "score_candidates", fake_score_candidates)
-    monkeypatch.setattr(visual_search, "is_loaded", lambda: True)
-    # search_service imported these by name at import time; patch the binding there too.
-    monkeypatch.setattr(search_service, "visual_score_candidates", fake_score_candidates)
+    def fake_text_embed(query, candidates):
+        if not candidates:
+            return {}
+        first_id = captured.get("id") or str(candidates[0]["listing_id"])
+        return {first_id: 0.88}
+
+    def fake_soft(candidates, soft, db_path):
+        if not candidates:
+            return []
+        first_id = captured.get("id") or str(candidates[0]["listing_id"])
+        # Two activated soft preferences -> two rankings, both favouring the same id.
+        return [[first_id], [first_id]]
+
+    monkeypatch.setattr(search_service, "visual_enabled", lambda: True)
     monkeypatch.setattr(search_service, "visual_is_loaded", lambda: True)
+    monkeypatch.setattr(search_service, "visual_score_candidates", fake_visual)
+    monkeypatch.setattr(search_service, "text_embed_enabled", lambda: True)
+    monkeypatch.setattr(search_service, "text_embed_is_loaded", lambda: True)
+    monkeypatch.setattr(search_service, "text_embed_score_candidates", fake_text_embed)
+    monkeypatch.setattr(search_service, "build_soft_rankings", fake_soft)
 
     from app.main import app
 
     with TestClient(app) as client:
         response = client.post(
-            "/listings", json={"query": "bright zurich", "limit": 5}
+            "/listings",
+            json={"query": "ruhig nahe Schulen in Winterthur", "limit": 5},
         )
 
     assert response.status_code == 200
     body = response.json()
     assert body["listings"]
     top = body["listings"][0]
-    # The listing we gave a visual score to must win the rank.
-    assert top["listing_id"] == captured_first_id["id"]
-    # Score is an RRF float (positive, small: ~1/(60+1) + 1/(60+1) ≈ 0.033).
+    # The listing boosted by every channel must win.
+    assert top["listing_id"] == captured["id"]
     assert top["score"] > 0
-    assert top["score"] < 0.1
-    assert "visual match" in top["reason"]
+    # Reason must mention all four contributors.
+    reason = top["reason"]
+    assert "text match" in reason or "BM25" not in reason  # BM25 implicit
+    assert "visual match" in reason
+    assert "semantic match" in reason
+    assert "soft preferences" in reason

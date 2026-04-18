@@ -13,3 +13,7 @@ def _disable_visual_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     "1" and monkeypatching the loader / encoder.
     """
     monkeypatch.setenv("LISTINGS_VISUAL_ENABLED", "0")
+    # Keep the unit suite fast: per-test tmp DBs should fall through to the
+    # legacy 500-row CSV importer instead of decompressing the 417 MB bundle.
+    monkeypatch.setenv("LISTINGS_SKIP_BUNDLE_INSTALL", "1")
+    monkeypatch.setenv("LISTINGS_TEXT_EMBED_ENABLED", "0")

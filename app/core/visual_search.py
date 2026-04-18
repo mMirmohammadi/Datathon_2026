@@ -189,15 +189,32 @@ def score_candidates(
     return out
 
 
+def fuse_rankings(
+    rankings: list[list[str]],
+    k: int = RRF_K,
+) -> dict[str, float]:
+    """Reciprocal Rank Fusion over an arbitrary number of rankings.
+
+    Each ranking is a best-first list of listing_ids. Higher = better in the
+    returned score dict. When a listing appears multiple times in a single
+    ranking only its first position counts (the expected RRF semantics;
+    prevents a pathological ranking from self-boosting).
+    """
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        seen: set[str] = set()
+        for rank, listing_id in enumerate(ranking, start=1):
+            if listing_id in seen:
+                continue
+            seen.add(listing_id)
+            scores[listing_id] = scores.get(listing_id, 0.0) + 1.0 / (k + rank)
+    return scores
+
+
 def fuse_rrf(
     bm25_order: list[str],
     visual_order: list[str],
     k: int = RRF_K,
 ) -> dict[str, float]:
-    """Reciprocal Rank Fusion. Higher = better. `k` defaults to the standard 60."""
-    scores: dict[str, float] = {}
-    for rank, listing_id in enumerate(bm25_order, start=1):
-        scores[listing_id] = scores.get(listing_id, 0.0) + 1.0 / (k + rank)
-    for rank, listing_id in enumerate(visual_order, start=1):
-        scores[listing_id] = scores.get(listing_id, 0.0) + 1.0 / (k + rank)
-    return scores
+    """Back-compat two-arg shim. Delegates to :func:`fuse_rankings`."""
+    return fuse_rankings([bm25_order, visual_order], k=k)
