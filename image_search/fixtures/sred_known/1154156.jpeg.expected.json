@@ -1,0 +1,15 @@
+{
+  "file": "1154156.jpeg",
+  "source_image_size": [
+    224,
+    224
+  ],
+  "source_image_mode": "RGB",
+  "note": "SHA-256 of raw RGB bytes of each 112x112 cell, in TL TR BL BR order (cell 0..3)",
+  "hashes": {
+    "c0": "5310bd8c7c6c9de46b07c1ffdfb91ddcfe9885993a3768d7fa20d5fb36898058",
+    "c1": "fb4db395ae9410d1e683f08293bdae98e4c9b3b39e7db8154d399ad19db30fe7",
+    "c2": "050006e4f551893570dd58f2d2b87a3df7943cc951eddc4c0f00980cf62c790a",
+    "c3": "e46b5f90240408a1395f9fa6a65721300c293f4ced6d94a1cefb99d0655e8fed"
+  }
+}
