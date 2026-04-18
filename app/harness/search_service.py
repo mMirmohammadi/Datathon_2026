@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any
 
 from app.core.hard_filters import HardFilterParams, search_listings
-from app.core.soft_signals import build_soft_rankings
+from app.core.match_explain import build_match_detail
+from app.core.soft_signals import _load_signal_rows, build_soft_rankings
 from app.core.text_embed_search import (
     is_loaded as text_embed_is_loaded,
     score_candidates as text_embed_score_candidates,
@@ -85,6 +86,31 @@ def _rerank_hybrid(
     return candidates
 
 
+def _pipeline_snapshot(
+    candidates: list[dict[str, Any]],
+    soft: SoftPreferences | None,
+) -> dict[str, Any]:
+    """Describe which ranking channels actually ran this turn.
+
+    Visual and text-embed flags mirror the env gate + load-state checks that
+    ``_rerank_hybrid`` uses so the UI reports the real pipeline, not the
+    aspirational one. ``soft_rankings`` counts how many per-preference
+    rankings joined the RRF fusion (each activated soft key with at least one
+    non-NULL candidate value contributes one ranking).
+    """
+    soft_count = 0
+    if candidates:
+        # Every candidate carries the same count (set by _rerank_hybrid).
+        soft_count = int(candidates[0].get("soft_signals_activated") or 0)
+    return {
+        "bm25": True,  # always in the fusion (input order channel)
+        "visual": bool(visual_enabled() and visual_is_loaded()),
+        "text_embed": bool(text_embed_enabled() and text_embed_is_loaded()),
+        "soft_rankings": soft_count,
+        "rrf_k": 60,
+    }
+
+
 def query_from_text(
     *,
     db_path: Path,
@@ -97,15 +123,57 @@ def query_from_text(
     hard_facts.offset = 0
     soft_facts = extract_soft_facts(query)
     candidates = filter_hard_facts(db_path, hard_facts)
+    pool_size = len(candidates)
     candidates = _rerank_hybrid(
         candidates, query, hard_facts.soft_preferences, db_path
     )
+    pipeline = _pipeline_snapshot(candidates, hard_facts.soft_preferences)
     candidates = candidates[offset : offset + limit]
     candidates = filter_soft_facts(candidates, soft_facts)
+    _attach_match_details(candidates, hard_facts, db_path)
     return ListingsResponse(
         listings=rank_listings(candidates, soft_facts),
-        meta={},
+        meta={
+            "query": query,
+            "query_plan": hard_facts.model_dump(),
+            "pipeline": pipeline,
+            "candidate_pool_size": pool_size,
+            "returned": min(limit, len(candidates)),
+        },
     )
+
+
+def _attach_match_details(
+    candidates: list[dict[str, Any]],
+    hard: HardFilters,
+    db_path: Path,
+) -> None:
+    """Attach a ``_match_detail`` MatchDetail object to each top-K candidate.
+
+    One DB read (batched) fetches the signal rows for the visible top-K; this
+    is the same query shape the soft-ranker uses, so we don't add a new kind
+    of DB pressure. Listings without a signals row still get hard-check and
+    keyword data — only the soft-fact panel will be empty for them.
+    """
+    if not candidates:
+        return
+    listing_ids = [str(c["listing_id"]) for c in candidates]
+    try:
+        rows = _load_signal_rows(db_path, listing_ids)
+    except Exception as exc:
+        print(
+            f"[WARN] _attach_match_details: expected=signal rows for top-K, "
+            f"got={type(exc).__name__}: {exc}, fallback=hard+keyword only",
+            flush=True,
+        )
+        rows = {}
+    for candidate in candidates:
+        lid = str(candidate["listing_id"])
+        candidate["_match_detail"] = build_match_detail(
+            listing=candidate,
+            hard=hard,
+            signal_row=rows.get(lid),
+        )
 
 
 def query_from_filters(
@@ -116,10 +184,23 @@ def query_from_filters(
     structured_hard_facts = hard_facts or HardFilters()
     soft_facts = extract_soft_facts("")
     candidates = filter_hard_facts(db_path, structured_hard_facts)
+    pool_size = len(candidates)
     candidates = filter_soft_facts(candidates, soft_facts)
     return ListingsResponse(
         listings=rank_listings(candidates, soft_facts),
-        meta={},
+        meta={
+            "query": None,
+            "query_plan": structured_hard_facts.model_dump(),
+            "pipeline": {
+                "bm25": False,
+                "visual": False,
+                "text_embed": False,
+                "soft_rankings": 0,
+                "rrf_k": 60,
+            },
+            "candidate_pool_size": pool_size,
+            "returned": len(candidates),
+        },
     )
 
 

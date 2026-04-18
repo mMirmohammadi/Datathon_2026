@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Datathon 2026 — Listings Search Demo</title>
+    <link rel="stylesheet" href="/demo-assets/demo.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <div>
+            <h1>Listings Search — Live Demo</h1>
+            <p class="muted small">
+              Swiss real-estate hybrid retrieval · hard filters × BM25 × (optional) SigLIP-2 × Arctic-Embed × soft-signal rankings × RRF
+            </p>
+          </div>
+        </div>
+        <div class="status" id="status"></div>
+      </div>
+    </header>
+
+    <section class="search-panel">
+      <form id="search-form">
+        <label for="query">
+          Natural-language query (DE · FR · IT · EN)
+          <span id="status-inline" class="status-inline"></span>
+        </label>
+        <div class="search-row">
+          <input
+            type="text"
+            id="query"
+            name="query"
+            autocomplete="off"
+            placeholder="e.g. 3.5 Zimmer Zürich unter 3000 CHF mit Balkon, ruhig, nahe ETH"
+            required
+          />
+          <select id="limit" name="limit" title="Number of results">
+            <option value="10">10</option>
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+          </select>
+          <button type="submit">Search</button>
+        </div>
+        <div class="examples">
+          <span class="muted small">Try:</span>
+          <button type="button" class="chip" data-example="3.5 Zimmer Zürich unter 3000 CHF mit Balkon, ruhig, nahe ETH">Zurich · 3.5 rooms · quiet · near ETH</button>
+          <button type="button" class="chip" data-example="Appartement 2 à 3 pièces à Genève, proche des écoles, calme">Genève · 2–3 pièces · quiet · écoles</button>
+          <button type="button" class="chip" data-example="3 bedroom family-friendly apartment in Basel with elevator, near park and supermarket">Basel · family · elevator · park</button>
+          <button type="button" class="chip" data-example="Luxurious penthouse in Zurich with fireplace, premium finish, close to public transport">Zurich · premium · fireplace · OeV</button>
+          <button type="button" class="chip" data-example="Moebliertes 1.5 Zimmer Studio in Bern Altstadt unter 2000 CHF">Bern · furnished · studio · ≤2000 CHF</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="explainer" id="explainer">
+      <details open>
+        <summary>How the ranking is derived (click to collapse)</summary>
+        <ol class="pipeline">
+          <li>
+            <b>LLM extraction</b> (gpt-4o-mini, strict JSON schema):
+            the query is parsed into <em>hard filters</em> (city, postal code, canton,
+            price range, rooms range, features) and <em>soft preferences</em>
+            (cheap / quiet / near public transport / near schools / near park / family
+            friendly / commute target / landmark proximity). Vague adjectives never
+            become hard filters — "modern" is never turned into <code>new_build</code>.
+          </li>
+          <li>
+            <b>Hard-filter gate</b> (SQL <code>WHERE</code>):
+            listings that violate <em>any</em> hard constraint are removed — they
+            never compete for ranking. This is strict, not scored.
+          </li>
+          <li>
+            <b>BM25 lexical relevance</b> (SQLite FTS5, always on):
+            the <code>bm25_keywords</code> the LLM extracted are matched against
+            <code>title × 3</code>, <code>description × 1</code>,
+            <code>street × 0.5</code>, <code>city × 0.5</code>.
+            The candidate pool arrives pre-ordered by BM25.
+          </li>
+          <li>
+            <b>Visual SigLIP-2 Giant</b> (cosine on 1536-d image embeddings, 70 548
+            photos): each candidate's best image is scored against the query text.
+            Max cosine per listing; listings without images are omitted from this
+            channel, not penalised.
+          </li>
+          <li>
+            <b>Semantic Arctic-Embed-L v2</b> (cosine on 1024-d description
+            embeddings, 25 546 listings): the query is re-written with the
+            <code>query:</code> prefix and scored against each description vector.
+          </li>
+          <li>
+            <b>Soft-preference rankings</b> (one per activated key):
+            <em>cheap</em>/<em>premium</em> sort by canton×rooms price delta (dropping
+            <code>price_plausibility=suspect</code> outliers),
+            <em>quiet</em> by distance to motorway + primary road,
+            <em>near_public_transport</em> by a composite of stop distance and line
+            count, <em>commute_target</em> by precomputed commute minutes to the HB,
+            <em>near_schools/supermarket/park</em> by POI counts, <em>near_landmark</em>
+            by per-landmark haversine columns. Listings with <code>NULL</code> for a
+            signal are <em>dropped from that ranking only</em> — never tail-ranked.
+          </li>
+          <li>
+            <b>Reciprocal Rank Fusion</b> (RRF, k=60): every ranking contributes
+            <code>1 / (60 + rank)</code> to each listing's score; results are sorted
+            by the summed score. Fusion is order-only; it doesn't trust raw scores
+            from different models on the same scale.
+          </li>
+        </ol>
+      </details>
+    </section>
+
+    <main class="results-grid">
+      <section class="meta-panel" id="meta-panel" hidden>
+        <div class="panel">
+          <h2>Query plan <span class="badge" id="badge-lang">LLM</span></h2>
+          <p class="muted small" id="raw-query"></p>
+          <div class="panel-body" id="hard-filters-view"></div>
+        </div>
+        <div class="panel">
+          <h2>Soft preferences</h2>
+          <div class="panel-body" id="soft-prefs-view"></div>
+        </div>
+        <div class="panel">
+          <h2>Pipeline</h2>
+          <div class="panel-body" id="pipeline-view"></div>
+        </div>
+        <details class="panel debug-panel">
+          <summary>Raw JSON response (for cross-checking)</summary>
+          <pre id="raw-json"></pre>
+        </details>
+      </section>
+
+      <section class="listings-panel">
+        <div id="result-status" class="muted"></div>
+        <div id="listings"></div>
+      </section>
+    </main>
+
+    <script src="/demo-assets/demo.js"></script>
+  </body>
+</html>

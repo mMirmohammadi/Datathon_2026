@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.models.schemas import ListingData, RankedListingResult
+from app.models.schemas import (
+    ListingData,
+    MatchDetail,
+    RankedListingResult,
+    RankingBreakdown,
+)
 
 
 _BM25_NO_MATCH_THRESHOLD = 1e8
@@ -28,15 +33,46 @@ def rank_listings(
         else:
             score = 0.0
             reason = "Matched hard filters; no text or visual match."
+        detail = candidate.get("_match_detail")
+        match_detail = detail if isinstance(detail, MatchDetail) else None
         results.append(
             RankedListingResult(
                 listing_id=str(candidate["listing_id"]),
                 score=score,
                 reason=reason,
                 listing=_to_listing_data(candidate),
+                breakdown=_to_breakdown(candidate),
+                match_detail=match_detail,
             )
         )
     return results
+
+
+def _to_breakdown(candidate: dict[str, Any]) -> RankingBreakdown:
+    """Flatten the per-channel scores the search service stored on `candidate`.
+
+    BM25 is flipped to positive-higher-is-better to match the API contract; a
+    sentinel score (``>= _BM25_NO_MATCH_THRESHOLD``) means the FTS5 query
+    didn't match this listing and is reported as ``None`` rather than a huge
+    misleading number.
+    """
+    bm25_raw = candidate.get("bm25_score")
+    bm25_out: float | None = None
+    if bm25_raw is not None and bm25_raw < _BM25_NO_MATCH_THRESHOLD:
+        bm25_out = float(-bm25_raw)
+
+    visual = candidate.get("visual_score")
+    text_embed = candidate.get("text_embed_score")
+    soft_count = candidate.get("soft_signals_activated")
+    rrf = candidate.get("rrf_score")
+
+    return RankingBreakdown(
+        rrf_score=float(rrf) if rrf is not None else None,
+        bm25_score=bm25_out,
+        visual_score=float(visual) if visual is not None else None,
+        text_embed_score=float(text_embed) if text_embed is not None else None,
+        soft_signals_activated=int(soft_count) if isinstance(soft_count, int) else 0,
+    )
 
 
 def _hybrid_reason(candidate: dict[str, Any]) -> str:

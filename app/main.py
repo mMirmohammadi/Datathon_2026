@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
 from app.api.routes.listings import router as listings_router
@@ -49,4 +51,25 @@ if _sred_images_dir.exists():
         "/raw-data-images",
         StaticFiles(directory=str(_sred_images_dir)),
         name="raw-data-images",
+    )
+
+
+# Demo frontend: single HTML page at /demo backed by assets served from
+# /demo-assets. Uses the same-origin /listings API; no CORS needed.
+_DEMO_DIR = Path(__file__).resolve().parent / "static"
+if _DEMO_DIR.exists() and (_DEMO_DIR / "demo.html").exists():
+    app.mount(
+        "/demo-assets",
+        StaticFiles(directory=str(_DEMO_DIR)),
+        name="demo-assets",
+    )
+
+    @app.get("/demo", include_in_schema=False)
+    def demo_page() -> FileResponse:
+        return FileResponse(str(_DEMO_DIR / "demo.html"))
+else:
+    print(
+        f"[WARN] demo_page_missing: expected=demo.html in {_DEMO_DIR}, "
+        f"got=not found, fallback=/demo route disabled",
+        flush=True,
     )

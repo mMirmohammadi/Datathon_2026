@@ -168,3 +168,126 @@ def test_post_listings_pipeline_hybrid_three_channels_plus_soft(
     assert "visual match" in reason
     assert "semantic match" in reason
     assert "soft preferences" in reason
+
+
+def test_post_listings_response_carries_demo_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the meta + per-listing `breakdown` fields the demo UI reads.
+
+    The /demo page renders the extracted query plan, activated soft
+    preferences, pipeline state, and a per-listing score breakdown. Any
+    rename or removal of these fields silently breaks that UI, so this
+    test pins the exact shape.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    os.environ["LISTINGS_RAW_DATA_DIR"] = str(repo_root / "raw_data")
+    os.environ["LISTINGS_DB_PATH"] = str(tmp_path / "listings.db")
+
+    from app.harness import search_service
+    from app.models.schemas import SoftPreferences
+
+    def fake_extract(query: str) -> HardFilters:
+        return HardFilters(
+            city=["zurich"],
+            max_price=3000,
+            features=["balcony"],
+            bm25_keywords=["ruhig"],
+            soft_preferences=SoftPreferences(quiet=True, near_public_transport=True),
+        )
+
+    monkeypatch.setattr(search_service, "extract_hard_facts", fake_extract)
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/listings",
+            json={"query": "zurich ruhig balkon", "limit": 3},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    meta = body["meta"]
+    assert meta["query"] == "zurich ruhig balkon"
+    # query_plan must be the LLM hard-filter JSON (with soft_preferences inline)
+    qp = meta["query_plan"]
+    assert qp["city"] == ["zurich"]
+    assert qp["max_price"] == 3000
+    assert qp["features"] == ["balcony"]
+    assert qp["bm25_keywords"] == ["ruhig"]
+    assert qp["soft_preferences"]["quiet"] is True
+    assert qp["soft_preferences"]["near_public_transport"] is True
+    # pipeline object required keys
+    pipeline = meta["pipeline"]
+    assert set(pipeline) >= {"bm25", "visual", "text_embed", "soft_rankings", "rrf_k"}
+    assert pipeline["bm25"] is True
+    assert pipeline["rrf_k"] == 60
+    assert isinstance(pipeline["soft_rankings"], int)
+    # pool/returned visibility
+    assert isinstance(meta["candidate_pool_size"], int)
+    assert isinstance(meta["returned"], int)
+
+    # Every returned listing must carry a breakdown with the five pinned keys.
+    assert body["listings"]
+    for item in body["listings"]:
+        bd = item["breakdown"]
+        assert bd is not None
+        assert set(bd) == {
+            "rrf_score",
+            "bm25_score",
+            "visual_score",
+            "text_embed_score",
+            "soft_signals_activated",
+        }
+        # With no keyword match, bm25_score is None, not a huge sentinel.
+        assert bd["bm25_score"] is None or bd["bm25_score"] > 0
+        assert bd["soft_signals_activated"] == pipeline["soft_rankings"]
+
+    # Every returned listing must also carry match_detail, shaped for the UI.
+    for item in body["listings"]:
+        md = item["match_detail"]
+        assert md is not None
+        assert set(md) == {
+            "hard_checks",
+            "matched_keywords",
+            "unmatched_keywords",
+            "soft_facts",
+        }
+        # One hard_check per requested hard constraint. Our fake_extract set
+        # city + max_price + features=[balcony] → expect 3 check rows.
+        labels = [h["label"] for h in md["hard_checks"]]
+        assert "city" in labels
+        assert "price" in labels
+        assert any(lbl.startswith("feature: balcony") for lbl in labels)
+        # Keyword classification must be disjoint and cover the requested set.
+        all_kw = set(md["matched_keywords"]) | set(md["unmatched_keywords"])
+        assert all_kw == {"ruhig"}
+        assert not (set(md["matched_keywords"]) & set(md["unmatched_keywords"]))
+        # Activated soft prefs were {quiet, near_public_transport} → expect
+        # at most two soft_facts (with real data may be 2; with no signal
+        # row we get [] and the UI renders "no data"); never more.
+        assert len(md["soft_facts"]) <= 2
+        for fact in md["soft_facts"]:
+            assert set(fact) == {"axis", "label", "value", "interpretation"}
+            assert fact["interpretation"] in {"good", "ok", "poor", "unknown"}
+
+
+def test_demo_page_served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The /demo page and its CSS/JS assets are reachable."""
+    repo_root = Path(__file__).resolve().parents[1]
+    os.environ["LISTINGS_RAW_DATA_DIR"] = str(repo_root / "raw_data")
+    os.environ["LISTINGS_DB_PATH"] = str(tmp_path / "listings.db")
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.get("/demo")
+        assert r.status_code == 200
+        assert "text/html" in r.headers["content-type"]
+        assert "Listings Search" in r.text
+        r = client.get("/demo-assets/demo.css")
+        assert r.status_code == 200
+        r = client.get("/demo-assets/demo.js")
+        assert r.status_code == 200

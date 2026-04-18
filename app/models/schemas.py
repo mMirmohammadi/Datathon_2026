@@ -90,11 +90,76 @@ class ListingData(BaseModel):
     object_type: str | None = None
 
 
+class RankingBreakdown(BaseModel):
+    """Per-listing scoring breakdown for UI explainability.
+
+    Every field maps 1:1 to a signal produced by ``_rerank_hybrid``. A ``None``
+    field means that channel did not contribute for this listing (either the
+    channel was disabled, or the listing had no data on that axis). The fused
+    ``rrf_score`` is the number the ranker sorts by; the per-channel fields
+    are the raw inputs so the UI can explain WHY a listing ranked where it did.
+    """
+
+    rrf_score: float | None = None
+    bm25_score: float | None = None
+    visual_score: float | None = None
+    text_embed_score: float | None = None
+    soft_signals_activated: int = 0
+
+
+class HardCheck(BaseModel):
+    """One row of the 'which hard constraints did this listing satisfy' table.
+
+    Every listing returned has passed the hard-filter gate, so ``ok`` is
+    ``True`` in practice — but we still emit one row per requested constraint
+    so the UI can show the user exactly what was checked and the listing's
+    actual value for that axis.
+    """
+
+    label: str
+    requested: str
+    value: str
+    ok: bool
+
+
+class MatchFact(BaseModel):
+    """One row of the 'soft signal value' table, shown per listing.
+
+    ``axis`` is the machine-readable soft-preference key (``quiet``,
+    ``near_schools``, ``landmark_eth_zentrum``, ...). ``value`` is already
+    formatted for display (``"409 m"``, ``"12% below canton×rooms baseline"``).
+    ``interpretation`` is one of ``"good" | "ok" | "poor" | "unknown"`` and
+    drives the badge colour in the UI.
+    """
+
+    axis: str
+    label: str
+    value: str
+    interpretation: str
+
+
+class MatchDetail(BaseModel):
+    """Per-listing explanation surfaced on click in the demo UI.
+
+    Everything needed to answer "why did this listing match and rank here?".
+    Populated only in the natural-language query path (``/listings``); the
+    raw filter endpoint leaves it ``None`` because there's no LLM-extracted
+    plan to explain against.
+    """
+
+    hard_checks: list[HardCheck] = Field(default_factory=list)
+    matched_keywords: list[str] = Field(default_factory=list)
+    unmatched_keywords: list[str] = Field(default_factory=list)
+    soft_facts: list[MatchFact] = Field(default_factory=list)
+
+
 class RankedListingResult(BaseModel):
     listing_id: str
     score: float
     reason: str
     listing: ListingData
+    breakdown: RankingBreakdown | None = None
+    match_detail: MatchDetail | None = None
 
 
 class ListingsResponse(BaseModel):
