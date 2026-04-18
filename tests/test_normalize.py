@@ -4,6 +4,7 @@ import pytest
 
 from app.core.normalize import (
     OBJECT_CATEGORY_ENGLISH,
+    extract_comparis_platform_id,
     slug,
     split_street,
     translate_object_category,
@@ -115,3 +116,23 @@ class TestSplitStreet:
         assert split_street(None) == (None, None)
         assert split_street("") == (None, None)
         assert split_street("   ") == (None, None)
+
+
+class TestExtractComparisPlatformId:
+    def test_canonical_url(self) -> None:
+        assert extract_comparis_platform_id(
+            "https://www.comparis.ch/immobilien/marktplatz/details/show/36493173"
+        ) == "36493173"
+
+    def test_url_with_query_string(self) -> None:
+        assert extract_comparis_platform_id(
+            "https://www.comparis.ch/immobilien/marktplatz/details/show/36493173?lang=de"
+        ) == "36493173"
+
+    def test_none_and_empty(self) -> None:
+        assert extract_comparis_platform_id(None) is None
+        assert extract_comparis_platform_id("") is None
+
+    def test_unexpected_shape(self) -> None:
+        assert extract_comparis_platform_id("https://example.com/foo") is None
+        assert extract_comparis_platform_id("not-a-url") is None

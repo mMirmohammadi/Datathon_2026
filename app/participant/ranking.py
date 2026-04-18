@@ -15,15 +15,20 @@ def rank_listings(
 ) -> list[RankedListingResult]:
     results: list[RankedListingResult] = []
     for candidate in candidates:
+        rrf = candidate.get("rrf_score")
         bm25 = candidate.get("bm25_score")
-        if bm25 is None or bm25 >= _BM25_NO_MATCH_THRESHOLD:
-            score = 0.0
-            reason = "Matched hard filters; no text match."
-        else:
+        visual = candidate.get("visual_score")
+        if rrf is not None and rrf > 0.0:
+            score = float(rrf)
+            reason = _hybrid_reason(bm25, visual)
+        elif bm25 is not None and bm25 < _BM25_NO_MATCH_THRESHOLD:
             # SQLite FTS5 bm25() returns a negative relevance score where more
             # negative = better. Flip sign so the API contract is higher=better.
             score = float(-bm25)
             reason = "Matched hard filters; ranked by text relevance."
+        else:
+            score = 0.0
+            reason = "Matched hard filters; no text or visual match."
         results.append(
             RankedListingResult(
                 listing_id=str(candidate["listing_id"]),
@@ -33,6 +38,17 @@ def rank_listings(
             )
         )
     return results
+
+
+def _hybrid_reason(bm25: Any, visual: Any) -> str:
+    parts = ["Matched hard filters"]
+    if bm25 is not None and bm25 < _BM25_NO_MATCH_THRESHOLD:
+        parts.append("text match")
+    if visual is not None and visual > 0:
+        parts.append(f"visual match ({float(visual):.2f})")
+    if len(parts) == 1:
+        parts.append("hybrid rank")
+    return "; ".join(parts) + "."
 
 
 def _to_listing_data(candidate: dict[str, Any]) -> ListingData:

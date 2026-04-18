@@ -46,11 +46,13 @@ def test_get_image_urls_by_listing_id_uses_platform_id_prefix(
     fake_client = FakeS3Client()
     monkeypatch.setattr("app.core.s3.boto3.client", lambda *args, **kwargs: fake_client)
 
-    # Any COMPARIS listing from the enriched sample; importer sets platform_id=listing_id.
+    # Listing 10286 in the enriched sample has original_url ending in
+    # /show/36493173 -> that's the real scrape-side platform_id the S3 path
+    # is keyed on.
     urls = get_image_urls_by_listing_id(db_path=db_path, listing_id="10286")
 
     assert fake_client.bucket == "crawl-data-951752554117-eu-central-2-an"
-    assert fake_client.prefix == "prod/comparis/images/platform_id=10286/"
+    assert fake_client.prefix == "prod/comparis/images/platform_id=36493173/"
     assert len(urls) == 2
     assert urls[0].endswith("image-1.jpg")
     assert urls[1].endswith("image-2.webp")

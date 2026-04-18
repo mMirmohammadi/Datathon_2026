@@ -169,6 +169,8 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
 
     select_cols = """
             listing_id,
+            platform_id,
+            scrape_source,
             title,
             description,
             street,
