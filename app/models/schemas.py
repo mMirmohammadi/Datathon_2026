@@ -27,6 +27,7 @@ class HardFilters(BaseModel):
     features: list[str] | None = None
     features_excluded: list[str] | None = None
     object_category: list[str] | None = None
+    bm25_keywords: list[str] | None = None
     limit: int = Field(default=20, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
     sort_by: Literal["price_asc", "price_desc", "rooms_asc", "rooms_desc"] | None = None

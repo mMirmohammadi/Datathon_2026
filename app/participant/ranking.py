@@ -6,21 +6,33 @@ from typing import Any
 from app.models.schemas import ListingData, RankedListingResult
 
 
+_BM25_NO_MATCH_THRESHOLD = 1e8
+
+
 def rank_listings(
     candidates: list[dict[str, Any]],
     soft_facts: dict[str, Any],
 ) -> list[RankedListingResult]:
-    # Intentionally stubbed. Teams can replace this with a scoring or
-    # reranking stage that uses the soft_facts payload.
-    return [
-        RankedListingResult(
-            listing_id=str(candidate["listing_id"]),
-            score=1.0,
-            reason="Matched hard filters; soft ranking stub.",
-            listing=_to_listing_data(candidate),
+    results: list[RankedListingResult] = []
+    for candidate in candidates:
+        bm25 = candidate.get("bm25_score")
+        if bm25 is None or bm25 >= _BM25_NO_MATCH_THRESHOLD:
+            score = 0.0
+            reason = "Matched hard filters; no text match."
+        else:
+            # SQLite FTS5 bm25() returns a negative relevance score where more
+            # negative = better. Flip sign so the API contract is higher=better.
+            score = float(-bm25)
+            reason = "Matched hard filters; ranked by text relevance."
+        results.append(
+            RankedListingResult(
+                listing_id=str(candidate["listing_id"]),
+                score=score,
+                reason=reason,
+                listing=_to_listing_data(candidate),
+            )
         )
-        for candidate in candidates
-    ]
+    return results
 
 
 def _to_listing_data(candidate: dict[str, Any]) -> ListingData:

@@ -69,13 +69,26 @@ FEATURES_EXCLUDED: only populate when the user explicitly negates ("without
 fireplace", "no garage", "ohne Kamin", "kein Erdgeschoss is handled via
 min_floor not features_excluded").
 
+BM25_KEYWORDS: emit short literal terms the user mentioned that help lexical
+text matching against listing descriptions. Include:
+- Domain nouns: "Minergie", "Altbau", "Attika", "Dachwohnung", "Loft",
+  "Keller", "Terrasse", "Lift", "Waschturm".
+- Named places / landmarks: "ETH", "EPFL", "HB", "Hauptbahnhof", "Stadelhofen",
+  "See", "Plainpalais".
+- Soft quality adjectives IF the user stated them verbatim: "modern", "hell",
+  "ruhig", "bright", "quiet". These are BM25 signal here; they are still
+  forbidden from turning into `features`.
+Skip generic words already covered by the hard schema (apartment, Wohnung,
+house, city names, numbers, dates) and stopwords. Keep it short (<= 8 terms).
+If nothing useful remains, emit an empty list.
+
 EXAMPLES:
 
 Query: "3-room bright apartment in Zurich under 2800 CHF with balcony, close to public transport"
-Output: {{"city":["zurich"],"min_rooms":3.0,"max_rooms":3.0,"max_price":2800,"features":["balcony"]}}
+Output: {{"city":["zurich"],"min_rooms":3.0,"max_rooms":3.0,"max_price":2800,"features":["balcony"],"bm25_keywords":["bright"]}}
 
 Query: "Wohnung im Raum Zuerich oder Duebendorf, 2.5 bis 3.5 Zimmer, ab 70 m2, bis 3100 CHF, max 25 Min zu Stadelhofen, gern mit Balkon und Waschturm"
-Output: {{"city":["zurich","dubendorf"],"min_rooms":2.5,"max_rooms":3.5,"min_area":70,"max_price":3100,"features":["balcony","private_laundry"]}}
+Output: {{"city":["zurich","dubendorf"],"min_rooms":2.5,"max_rooms":3.5,"min_area":70,"max_price":3100,"features":["balcony","private_laundry"],"bm25_keywords":["Balkon","Waschturm","Stadelhofen"]}}
 """
 
 
@@ -117,6 +130,7 @@ _HARD_FILTERS_SCHEMA = {
                 ["array", "null"],
                 items={"type": "string", "enum": OBJECT_CATEGORY_ENGLISH},
             ),
+            "bm25_keywords": _nullable(["array", "null"], items={"type": "string"}),
         },
         "required": [
             "city", "postal_code", "canton",
@@ -124,6 +138,7 @@ _HARD_FILTERS_SCHEMA = {
             "min_area", "max_area", "min_floor", "max_floor",
             "min_year_built", "max_year_built", "available_from_after",
             "features", "features_excluded", "object_category",
+            "bm25_keywords",
         ],
     },
 }

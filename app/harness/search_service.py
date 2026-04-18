@@ -71,6 +71,7 @@ def to_hard_filter_params(hard_facts: HardFilters) -> HardFilterParams:
         features=hard_facts.features,
         features_excluded=hard_facts.features_excluded,
         object_category=hard_facts.object_category,
+        bm25_keywords=hard_facts.bm25_keywords,
         limit=hard_facts.limit,
         offset=hard_facts.offset,
         sort_by=hard_facts.sort_by,

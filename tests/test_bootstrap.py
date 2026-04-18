@@ -34,7 +34,18 @@ def test_bootstrap_creates_sqlite_database(tmp_path: Path) -> None:
         "scrape_source",
         "street",
         "object_type",
+        "object_category_raw",
+        "house_number",
+        "city_slug",
+        "floor",
+        "year_built",
     } <= columns
+
+    with sqlite3.connect(db_path) as connection:
+        fts_table = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'listings_fts'"
+        ).fetchone()
+    assert fts_table is not None, "listings_fts virtual table missing after bootstrap"
 
 
 def test_bootstrap_preserves_existing_db_on_schema_mismatch(

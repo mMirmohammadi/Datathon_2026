@@ -35,6 +35,8 @@ def bootstrap_database(*, db_path: Path, raw_data_dir: Path) -> None:
         create_schema(connection)
         import_enriched_csv(connection, enriched_csv_path)
         create_indexes(connection)
+        connection.execute("INSERT INTO listings_fts(listings_fts) VALUES('rebuild')")
+        connection.commit()
 
 
 def _schema_matches(db_path: Path) -> bool:
@@ -49,6 +51,7 @@ def _schema_matches(db_path: Path) -> bool:
         "city_slug",
         "floor",
         "year_built",
+        "object_category_raw",
         "object_type",
         "feature_wheelchair_accessible",
         "feature_private_laundry",

@@ -16,6 +16,7 @@ _ROWS: list[dict[str, object]] = [
     {
         "listing_id": "L1",
         "title": "A",
+        "description": "Bright apartment with balcony in zurich",
         "city": "zurich", "city_slug": "zurich",
         "postal_code": 8001, "canton": "ZH",
         "price": 2000, "rooms": 2.0, "area": 55, "floor": 1, "year_built": 2010,
@@ -29,6 +30,7 @@ _ROWS: list[dict[str, object]] = [
     {
         "listing_id": "L2",
         "title": "B",
+        "description": "Modern Wohnung mit Lift und Balkon",
         "city": "zurich", "city_slug": "zurich",
         "postal_code": 8002, "canton": "ZH",
         "price": 3000, "rooms": 3.5, "area": 80, "floor": 3, "year_built": 2020,
@@ -42,6 +44,7 @@ _ROWS: list[dict[str, object]] = [
     {
         "listing_id": "L3",
         "title": "C",
+        "description": "Cozy parking space",
         "city": "winterthur", "city_slug": "winterthur",
         "postal_code": 8400, "canton": "ZH",
         "price": 1500, "rooms": 2.5, "area": 60, "floor": 0, "year_built": 1995,
@@ -55,6 +58,7 @@ _ROWS: list[dict[str, object]] = [
     {
         "listing_id": "L4",
         "title": "D",
+        "description": "Spacious house with balcony and parking near lake",
         "city": "winterthur", "city_slug": "winterthur",
         "postal_code": 8400, "canton": "ZH",
         "price": 2800, "rooms": 4.5, "area": 120, "floor": 2, "year_built": 2025,
@@ -68,6 +72,7 @@ _ROWS: list[dict[str, object]] = [
     {
         "listing_id": "L5",
         "title": "E",
+        "description": "Elevator apartment downtown Geneve",
         "city": "geneva", "city_slug": "geneva",
         "postal_code": 1201, "canton": "GE",
         "price": 2500, "rooms": 3.0, "area": 70, "floor": 4, "year_built": 2015,
@@ -81,6 +86,7 @@ _ROWS: list[dict[str, object]] = [
     {
         "listing_id": "L6",
         "title": "F",
+        "description": "Luxury house with fireplace, elevator, balcony and parking",
         "city": "geneva", "city_slug": "geneva",
         "postal_code": 1202, "canton": "GE",
         "price": 5000, "rooms": 5.0, "area": 180, "floor": 0, "year_built": 2000,
@@ -94,6 +100,7 @@ _ROWS: list[dict[str, object]] = [
     {
         "listing_id": "L7",
         "title": "G",
+        "description": "Standard listing no extras",
         "city": "bern", "city_slug": "bern",
         "postal_code": 3000, "canton": "BE",
         "price": None, "rooms": None, "area": None, "floor": None, "year_built": None,
@@ -107,6 +114,7 @@ _ROWS: list[dict[str, object]] = [
     {
         "listing_id": "L8",
         "title": "H",
+        "description": "Small studio with balcony in a Minergie building",
         "city": "basel", "city_slug": "basel",
         "postal_code": 4000, "canton": "BS",
         "price": 2200, "rooms": 2.5, "area": 50, "floor": -1, "year_built": 1980,
@@ -124,15 +132,16 @@ def _insert(connection, row: dict[str, object]) -> None:
     connection.execute(
         """
         INSERT INTO listings (
-            listing_id, title, city, city_slug, postal_code, canton,
+            listing_id, title, description, city, city_slug, postal_code, canton,
             price, rooms, area, floor, year_built, available_from,
             latitude, longitude, house_number,
             feature_balcony, feature_elevator, feature_parking,
             features_json, offer_type, object_category, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            row["listing_id"], row["title"], row["city"], row["city_slug"],
+            row["listing_id"], row["title"], row.get("description", ""),
+            row["city"], row["city_slug"],
             row["postal_code"], row["canton"],
             row["price"], row["rooms"], row["area"], row["floor"],
             row["year_built"], row["available_from"],
@@ -154,6 +163,8 @@ def fixture_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
             _insert(connection, row)
         connection.commit()
         create_indexes(connection)
+        connection.execute("INSERT INTO listings_fts(listings_fts) VALUES('rebuild')")
+        connection.commit()
     return db_path
 
 
@@ -454,3 +465,34 @@ def test_combined_city_price_features_sorted(fixture_db: Path) -> None:
         ),
     )
     assert _ids(rows) == ["L1", "L4"]
+
+
+# ---------- bm25_keywords end-to-end ----------
+
+def test_bm25_keywords_rank_matching_rows_first(fixture_db: Path) -> None:
+    rows = search_listings(
+        fixture_db, HardFilterParams(bm25_keywords=["Minergie"], limit=100)
+    )
+    # L8 is the only row mentioning Minergie in the description; it must come first.
+    assert rows[0]["listing_id"] == "L8"
+    assert rows[0]["bm25_score"] < 0
+    # All other rows still returned, with no-match score.
+    assert len(rows) == 8
+    assert all(r["bm25_score"] >= 1e8 for r in rows[1:])
+
+
+def test_bm25_keywords_intersect_with_hard_filter(fixture_db: Path) -> None:
+    # Gate by city=zurich (L1, L2). BM25 "Balkon" matches L2's German description.
+    rows = search_listings(
+        fixture_db,
+        HardFilterParams(city=["zurich"], bm25_keywords=["Balkon"], limit=100),
+    )
+    assert set(_ids(rows)) == {"L1", "L2"}
+    assert rows[0]["listing_id"] == "L2"
+    assert rows[0]["bm25_score"] < 0
+
+
+def test_bm25_keywords_empty_list_is_noop(fixture_db: Path) -> None:
+    rows = search_listings(fixture_db, HardFilterParams(bm25_keywords=[], limit=100))
+    assert _ids(rows) == ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"]
+    assert "bm25_score" not in rows[0]
