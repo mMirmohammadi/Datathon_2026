@@ -9,7 +9,7 @@
 ## 1. Executive summary
 
 1. **The corpus is 22,819 rent listings across 4 scrape sources**, but they are **not interchangeable**. Robinreal (797) is small and high-fidelity; `structured_with_images` (4,160) and `structured_without_images` (6,757) come from Comparis and carry status + category metadata; SRED (11,105) is **half the corpus** and ships with **no address, no category, no status, no offer_type, and no structured feature flags** — only lat/lng, price, rooms, area, title, description, and one local montage image.
-2. **Effective searchable size depends entirely on what you keep.** If you demand `status=ACTIVE`, you have **2,042 rows (8.9%)**. If you keep "not explicitly INACTIVE/DELETED" (i.e. ACTIVE + SRED's null-status), you have **12,523 rows (54.9%)**. See the funnel plot [plots/21_funnel_realistic.png](plots/21_funnel_realistic.png).
+2. **Effective searchable size depends entirely on what you keep.** If you demand `status=ACTIVE`, you have **2,042 rows (8.9%)**. If you keep "not explicitly INACTIVE/DELETED" (i.e. ACTIVE + SRED's null-status), you have **13,147 rows (57.6%)**. Under the fuller funnel (also requiring price ≥ 200, rooms ∈ (0, 15], RENT, residential-or-null category), you end at **12,312 rows (54.0%)**. See the funnel plot [plots/21_funnel_realistic.png](plots/21_funnel_realistic.png).
 3. **Structured fields are silently incomplete.** `available_from` is null in 70% of the corpus; `year_built` in 92%; `floor` in 86%; canton in 65%. Every hard-filter query except price/rooms has to fall back on reverse-geocoding or description-derived features, or accept that it's dropping half the corpus.
 4. **Parser fallbacks work better than expected for city/canton** — after parsing the `location_address` JSON column, struct_img and struct_noi have city populated in ~100% of rows (not ~0% as the raw column suggests). SRED is the only source with 100% missing address fields.
 5. **Safety-surface issues exist and are small.** No XSS code execution risk in descriptions, but 250 `<a>` tags + 2 `<img>` tags survive parsing into the widget path; ~571 descriptions contain bare email addresses and ~1,938 contain phone-shaped strings; ~432 rows contain exclusionary phrases (no-pets, adults-only, singles-only). None of these are corpus-ending but each needs one mitigation line.
@@ -76,7 +76,7 @@ The addendum plot [plots/26_year_built_floor_coverage.png](plots/26_year_built_f
 - **21,173 rows (92.8%)** have lat/lng inside the Swiss bounding box.
 - **1,637 rows (7.2%)** have no lat/lng at all — 1,547 of those are struct_noi and 90 are robinreal.
 - **9 rows have coordinates outside CH** — 8 of them are `lat=0, lon=0` (null island), all in struct_img. These must be dropped.
-- **1 SRED row is rounded to 2 decimal places** (~1 km precision), suggesting a coarsened anonymisation grid; 18 more are at ≤2dp per the qualitative audit.
+- **1 SRED row's `(lat, lng)` is exactly 2-decimal** (~1 km precision) — possible anonymisation artefact. A separate precision spot-check on raw SRED string coordinates flagged ~18 more rows with ≤2 decimal places; the two numbers differ because "exactly 2dp" ≠ "at most 2dp" and the two checks were run on different serialisations. Not a blocker; worth a one-time audit if precision matters for commute-based features.
 
 ### Canton and city
 
@@ -126,7 +126,7 @@ Plus **1,331 rows have price < 200 CHF** (parking spots mixed into the rent corp
 
 ### Area
 
-`area` is string-typed upstream: **3,775 rows contain `"nicht verfügbar"`** and 235 contain `"<missing area>"` instead of a number. After coercion, `area` is populated and plausible in 18,581 rows. 29 rows exceed 2,000 m² (clearly bogus) and 21 are ≤ 5 m² (also bogus).
+`area` is string-typed upstream: **3,775 rows contain `"nicht verfügbar"`** and 235 contain `"<missing area>"` instead of a number. After coercion, `area` is populated in 18,581 rows. 29 rows have `area ≥ 2,000 m²` (26 strictly greater; 3 exactly 2,000 — all bogus) and 21 rows have `area ≤ 5 m²` (also bogus).
 
 ### price_type enum
 
@@ -148,7 +148,7 @@ SRED remains the exception — **all 12 feature flags are 100% null for all 11,1
 
 Among rows where the flag is known, the positive rate looks realistic: balcony 21–44%, elevator 23–33%, parking 10–26%, fireplace 2–3%. The **one useless flag is `feature_child_friendly`** — in struct_img and struct_noi the parser only emits it for 3–11% of rows, and when it does, it's TRUE 100% of the time. It's effectively an "advertising claim" flag and should not be used as a hard negative.
 
-Four features are never populated anywhere: `temporary`, and in robinreal also `wheelchair_accessible` / `private_laundry` / `minergie_certified`.
+One feature (`temporary`) is not populated anywhere — 0 known rows in all four sources. Three more (`wheelchair_accessible`, `private_laundry`, `minergie_certified`) are 100% known in struct_img and struct_noi but 0% known in robinreal and SRED. None of these four are usable as filters for robinreal or SRED.
 
 ---
 
@@ -165,7 +165,7 @@ Simple token-heuristic on the first 800 chars of description: **DE 71%, FR 22%, 
 - struct_img: 67% DE, 25% FR, 4% IT
 - struct_noi: 58% DE, 30% FR, 4% IT, 7% unknown
 
-Any keyword or regex feature-extraction pass must be multilingual. A single-language NLU layer will fail silently on **≈7,000 rows**.
+Any keyword or regex feature-extraction pass must be multilingual. A single-language (DE-only) NLU layer will fail silently on **6,593 rows (28.9%)**.
 
 ### Length and HTML
 
@@ -175,11 +175,11 @@ Median description length is 744 chars (HTML-stripped); p90 is 1,556. 560 rows a
 
 | tag kind                     | rows |
 |------------------------------|-----:|
-| `<a href=…>`                 |  250 |
-| `<img …>`                    |    2 |
-| `<script>` / `<iframe>` / event handler | 1 |
+| `<a>`                        |  250 |
+| `<img>`                      |    2 |
+| `<script>` / `<iframe>` / event handler | 0 |
 
-No stored XSS vectors that would execute arbitrary code, but **sanitise aggressively** before rendering (DOMPurify with an explicit allow-list). The 1 event-handler hit is worth a manual look.
+No stored XSS vectors found in the corpus — the one earlier "event-handler" match was a **regex false positive** (the German word fragment `…onat =` in "CHF 85.00 Monat =" matches `on\w+\s*=`). Still **sanitise aggressively** before rendering (DOMPurify with an explicit allow-list) because the 250 `<a>` anchors and 2 `<img>` tags carry outbound-link / IP-leak risk even without executable code.
 
 ---
 
@@ -192,7 +192,7 @@ No stored XSS vectors that would execute arbitrary code, but **sanitise aggressi
 - SRED ships exactly 1 local montage image per row; 11,105 files in [raw_data/sred_images/](../raw_data/sred_images/) map 1:1 to the 11,105 SRED `platform_id`s.
 - robinreal, struct_img, struct_noi point at remote HTTPS URLs (Robinreal S3 and Comparis CDN).
 - **struct_img has a hybrid mix**: 3,632 rows HTTPS-only, 379 rows local-only, 3 mixed, 146 no images. The 382 rows with local paths will 404 from a public widget unless the server proxies `/raw-data-images/*`.
-- struct_noi has 1,495 rows with zero images — unsurprising given the filename, but **234 rows in struct_noi do have images** despite the "_withoutimages" label (another reason not to trust the filename).
+- struct_noi is **mis-named**: despite the "_withoutimages" suffix, **5,262 of 6,757 struct_noi rows (77.9%) carry image URLs** (5,023 HTTPS + 234 local-only + 5 mixed). Only 1,495 rows are truly image-free.
 
 1,646 rows corpus-wide have zero images. That excludes them from any image-based ranking.
 
@@ -202,7 +202,16 @@ No stored XSS vectors that would execute arbitrary code, but **sanitise aggressi
 
 ![last scraped](plots/18_last_scraped_timeline.png)
 
-`time_of_creation` and `last_scraped` both fall in **April 2026** — the scrape is fresh (7 days at most for the most recent rows). `time_of_creation` doesn't mean "when the listing went live" — it means "when this row was created in the scrape DB".
+`time_of_creation` and `last_scraped` span a wider window than the filenames suggest. Per source:
+
+| source     | time_of_creation range            | last_scraped range                | n (non-null) |
+|------------|-----------------------------------|-----------------------------------|-------------:|
+| robinreal  | 2026-04-01 → 2026-04-17           | 2026-04-01 → 2026-04-17           |  120 / 405   |
+| struct_img | 2026-01-21 → 2026-04-15           | 2026-01-15 → 2026-04-15           | 4,160 / 4,160 |
+| struct_noi | **2025-12-10** → 2026-04-15       | **2025-12-20** → 2026-04-15       | 6,757 / 6,757 |
+| sred       | (all null)                         | (all null)                         |       0 / 0   |
+
+So the oldest listings date back 4+ months; only robinreal is freshly-scraped and SRED has no scrape timestamps at all. `time_of_creation` is the row-insert timestamp, not listing go-live.
 
 `available_from` is the move-in date and it's **100% null in SRED, 46% null in struct_noi, 38% null in struct_img, 17% null in robinreal**. Move-in queries ("April move-in") can be strictly enforced on only **30% of the corpus** (6,868 rows).
 
@@ -262,7 +271,7 @@ For a set of canonical hard-filter intents, how many rows can even be evaluated 
 | parking = TRUE                       | 2,358 | 10.3% |
 | canton = ZH                          | 1,673 | 7.3% |
 | city = Zürich                        | 949 | 4.2% |
-| city ∈ top-5 cities                   | 2,276 | 10.0% |
+| city ∈ top-5 cities (Zürich/Genève/Lausanne/Basel/Bern, exact) | 2,268 | 9.9% |
 | within 5 km of ETH (Haversine)       | 982 | 4.3% |
 | `available_from` set                 | 6,868 | 30.1% |
 | has any image URL                    | 21,173 | 92.8% |
@@ -332,8 +341,8 @@ Three independent auditor agents ran their own pandas scripts against the raw CS
 | Null canton after coalesce     | 0 / 90 / 3,679 / 11,105 | confirmed |
 | Status totals                  | 2,042 / 9,663 / 9 / 11,105 | confirmed |
 | 5 km of ETH (Haversine)        | 982 | corrected from an earlier naive-box count of 795 |
-| HTML tag hits (tight regex)    | 11,384 | confirmed (case-sensitive; lowercase-only gives 10,458) |
-| Script/iframe/event handlers   | 1 | confirmed — worth manual review |
+| HTML tag hits (case-insensitive `<[a-zA-Z/]`) | 11,384 | confirmed; lowercase-only `<[a-z/]` misses uppercase tags and gives 11,225 |
+| Script/iframe/event handlers   | 0 | corrected — my earlier "1" was a regex false positive (`on\w+\s*=` caught the German fragment `…onat =` in "Monat = CHF 85.00") |
 | `<a>` tags in descriptions     | 250 | confirmed |
 | Discriminatory phrases         | 432 rows | confirmed |
 | PII emails in descriptions     | 571 | confirmed; agency_* columns 100% NULL corroborated |

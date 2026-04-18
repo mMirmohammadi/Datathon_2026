@@ -78,7 +78,14 @@ EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 # Swiss phone-style: exclude obvious dates like "1. April 2026" by requiring 7+ digits in cluster.
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?41|0)\s?(?:\d[\s./-]?){8,12}\d(?!\d)")
 URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
-SCRIPT_RE = re.compile(r"<\s*(?:script|iframe|object|embed)\b|javascript:|on\w+\s*=", re.IGNORECASE)
+# Tight pattern: require the event handler to start at a word boundary AFTER a tag-like context,
+# not in the middle of a word like "Monat =". Match literal event-handler names only.
+_EVENT_NAMES = (r"onclick|onload|onerror|onmouseover|onmouseout|onfocus|onblur|onchange|onsubmit|"
+                r"oninput|onkeydown|onkeyup|onkeypress|ontoggle|onanimation\w*|ontransition\w*")
+SCRIPT_RE = re.compile(
+    r"<\s*(?:script|iframe|object|embed)\b|javascript:|(?:(?<=<)|\s)(?:" + _EVENT_NAMES + r")\s*=",
+    re.IGNORECASE,
+)
 ANCHOR_RE = re.compile(r"<\s*a\b", re.IGNORECASE)
 IMG_RE = re.compile(r"<\s*img\b", re.IGNORECASE)
 
