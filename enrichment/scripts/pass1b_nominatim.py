@@ -324,7 +324,10 @@ def run(
         if limit is not None:
             keys = keys[:limit]
 
-        # Periodic cache flush for long runs
+        # Periodic cache flush + DB commit for long runs.
+        # The commit is CRITICAL: without it, this script holds a write lock
+        # for the entire ~4-hour run and blocks any concurrent pass (e.g. the
+        # GPT pass 2). Committing every FLUSH_EVERY coords releases the lock.
         FLUSH_EVERY = 50
         flush_counter = 0
 
@@ -388,6 +391,12 @@ def run(
                             raw=None,
                         )
                         stats["street_filled"] += 1
+
+            # CRITICAL: commit once per coord so concurrent writers (pass 2 GPT)
+            # can acquire the write lock within their 30s busy_timeout. Without
+            # this, pass 1b holds the lock for many minutes and blocks every
+            # other writer. At 1 req/s the per-row commit cost (<1 ms) is free.
+            conn.commit()
 
         conn.commit()
         _save_cache(cache)

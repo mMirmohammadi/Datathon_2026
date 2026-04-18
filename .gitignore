@@ -22,3 +22,7 @@ htmlcov/
 apps_sdk/web/node_modules/
 apps_sdk/web/dist/
 raw_data/
+
+# Enrichment-pipeline generated artefacts (caches, run reports, disagreement dumps).
+# Source code stays tracked; only the data it produces is gitignored.
+enrichment/data/

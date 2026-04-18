@@ -22,11 +22,49 @@ listings  →  pass 0  (CREATE listings_enriched + backfill 'original' values fr
           →  drop_bad_rows  (mark price<200, price>50k, rooms=0 as DROPPED_bad_data)
           →  pass 1a  (reverse_geocoder offline → city + canton, 26-canton map)
           →  pass 1b  (Nominatim → postal_code + street, 1 req/s, disk-cached)
-          →  pass 2   (multilingual regex → 12 feature flags, year_built, floor, area,
-                       available_from, agency_phone, agency_email, agency_name)
+          →  pass 2   description extraction — two implementations:
+              · pass 2 GPT  (default) — OpenAI gpt-5.4-mini Structured Outputs
+              · pass 2 regex (legacy) — multilingual regex + YAML patterns
           →  pass 3   (UNKNOWN-pending → UNKNOWN, registry-drift guard)
           →  assert_no_nulls post-condition
 ```
+
+### Pass 2: GPT vs regex
+
+The GPT implementation is preferred for accuracy — it handles DE/FR/IT/EN
+natively, reads context rather than tokens, and catches paraphrases the regex
+catalogue misses. The legacy regex pass is kept around for zero-cost local
+runs and as a reference for the output contract.
+
+| Aspect                | pass 2 GPT (default)                                         | pass 2 regex (legacy)                         |
+| --------------------- | ------------------------------------------------------------ | --------------------------------------------- |
+| Model / engine        | `gpt-5.4-mini-2026-03-17`                                    | YAML patterns in `enrichment/patterns/*.yaml` |
+| Cost for 25k listings | ~$50 one-shot (aggressive prompt cache halves this)          | $0                                            |
+| Wall-clock            | ~90 min (16 concurrent async)                                | ~30 s                                         |
+| Languages             | DE/FR/IT/EN + anything else GPT understands                  | DE/FR/IT/EN only                              |
+| Cache                 | append-only JSONL at `enrichment/data/cache/gpt_pass2.jsonl` | none                                          |
+| Source tag            | `text_gpt_5_4`                                               | `text_regex_{de,fr,it,en}`                    |
+
+Toggle with `--pass2-impl=gpt` (default) or `--pass2-impl=regex`. Both share
+the same `listings_enriched` write contract — you can mix and match by
+re-running on already-enriched rows; the non-overwrite invariant protects
+already-filled values.
+
+### Concurrency: SQLite locking
+
+Pass 1b (1 req/s) and pass 2 (16 concurrent) can run simultaneously because:
+
+1. `common/db.py:connect()` enables `journal_mode=WAL` + `busy_timeout=30s` +
+   `synchronous=NORMAL`. Readers never block writers in WAL.
+2. Every writing pass commits frequently — pass 1b commits once per
+   coordinate, pass 2 commits every 25 rows from its cache-apply loop plus
+   every 200 from the live GPT loop. This keeps the exclusive write-lock
+   holding time well under the 30 s busy_timeout.
+
+If you see `database is locked` errors, check (a) that the DB really is in
+WAL mode (`sqlite3 data/listings.db 'PRAGMA journal_mode;'` should print
+`wal`), and (b) that no long-running pass (including an interrupted one) is
+holding a stale transaction.
 
 ## Layout
 

@@ -5,15 +5,18 @@ Order:
     2. drop_bad_rows       — mark bogus price/rooms with DROPPED_bad_data
     3. pass1_geocode       — offline reverse_geocoder (1a)
     4. pass1b_nominatim    — Nominatim for postal/street (skippable via --skip-1b)
-    5. pass2_text_extract  — multilingual regex over descriptions
+    5. pass2_*             — description extraction. Two implementations:
+                              --pass2-impl=gpt     (default) OpenAI gpt-5.4-mini
+                              --pass2-impl=regex   multilingual regex (legacy)
     6. pass3_sentinel_fill — convert UNKNOWN-pending to UNKNOWN
     7. assert_no_nulls     — final invariant check: every _filled non-null,
                               no _source = UNKNOWN-pending
 
 Usage:
-    python -m enrichment.scripts.enrich_all --db /data/listings.db
-    python -m enrichment.scripts.enrich_all --db /data/listings.db --skip-1b
-    python -m enrichment.scripts.enrich_all --db /data/listings.db --pass1b-limit 100
+    python -m enrichment.scripts.enrich_all --db data/listings.db
+    python -m enrichment.scripts.enrich_all --db data/listings.db --skip-1b
+    python -m enrichment.scripts.enrich_all --db data/listings.db --pass2-impl=regex
+    python -m enrichment.scripts.enrich_all --db data/listings.db --pass1b-limit 100
 """
 from __future__ import annotations
 
@@ -61,13 +64,30 @@ def run(
     *,
     skip_pass1b: bool = False,
     pass1b_limit: int | None = None,
+    pass2_impl: str = "gpt",
 ) -> dict[str, object]:
     from enrichment.scripts.drop_bad_rows import run as drop_run
     from enrichment.scripts.pass0_create_table import run as pass0_run
     from enrichment.scripts.pass1_geocode import run as pass1_run
     from enrichment.scripts.pass1b_nominatim import run as pass1b_run
-    from enrichment.scripts.pass2_text_extract import run as pass2_run
     from enrichment.scripts.pass3_sentinel_fill import run as pass3_run
+
+    if pass2_impl == "gpt":
+        from enrichment.scripts.pass2_gpt_extract import main as pass2_main_gpt
+
+        def pass2_run(path: Path) -> dict:
+            import sys as _sys
+            saved = _sys.argv
+            _sys.argv = ["pass2_gpt_extract", "--db", str(path)]
+            try:
+                rc = pass2_main_gpt()
+            finally:
+                _sys.argv = saved
+            return {"exit_code": rc, "impl": "gpt-5.4-mini"}
+    elif pass2_impl == "regex":
+        from enrichment.scripts.pass2_text_extract import run as pass2_run  # noqa: F811
+    else:
+        raise ValueError(f"--pass2-impl must be 'gpt' or 'regex', got {pass2_impl!r}")
 
     results: dict[str, object] = {}
 
@@ -92,8 +112,8 @@ def run(
         print(f"[enrich_all] pass1b done in {time.monotonic() - t3:.1f}s", flush=True)
 
     t4 = time.monotonic()
-    results["pass2"] = pass2_run(db_path)
-    print(f"[enrich_all] pass2 done in {time.monotonic() - t4:.1f}s", flush=True)
+    results[f"pass2_{pass2_impl}"] = pass2_run(db_path)
+    print(f"[enrich_all] pass2 ({pass2_impl}) done in {time.monotonic() - t4:.1f}s", flush=True)
 
     t5 = time.monotonic()
     results["pass3"] = pass3_run(db_path)
@@ -121,6 +141,16 @@ def main() -> int:
         help="Cap pass 1b at N unique coordinates (production default: unlimited).",
     )
     parser.add_argument(
+        "--pass2-impl",
+        choices=["gpt", "regex"],
+        default="gpt",
+        help=(
+            "Which pass-2 implementation to use. Default 'gpt' = OpenAI "
+            "gpt-5.4-mini structured extraction (~$50 per 25k rows, ~2h). "
+            "'regex' = the legacy multilingual regex pass (~30s, needs patterns/*.yaml)."
+        ),
+    )
+    parser.add_argument(
         "--json",
         type=Path,
         default=None,
@@ -131,7 +161,12 @@ def main() -> int:
         print(f"[ERROR] DB not found at {args.db}", file=sys.stderr)
         return 2
 
-    results = run(args.db, skip_pass1b=args.skip_1b, pass1b_limit=args.pass1b_limit)
+    results = run(
+        args.db,
+        skip_pass1b=args.skip_1b,
+        pass1b_limit=args.pass1b_limit,
+        pass2_impl=args.pass2_impl,
+    )
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)

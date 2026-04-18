@@ -15,6 +15,7 @@ TEXT_REGEX_DE: Final[str]        = "text_regex_de"
 TEXT_REGEX_FR: Final[str]        = "text_regex_fr"
 TEXT_REGEX_IT: Final[str]        = "text_regex_it"
 TEXT_REGEX_EN: Final[str]        = "text_regex_en"
+TEXT_GPT_5_4: Final[str]         = "text_gpt_5_4"         # pass 2 GPT: OpenAI gpt-5.4-mini extraction
 DEFAULT_CONSTANT: Final[str]     = "default_constant"     # e.g. offer_type='RENT' default
 CROSS_REF: Final[str]            = "cross_ref"            # reconciled across sources
 UNKNOWN: Final[str]              = "UNKNOWN"              # pass 3 sentinel
@@ -27,6 +28,7 @@ VALID_SOURCES: frozenset[str] = frozenset({
     ORIGINAL,
     REV_GEO_OFFLINE, REV_GEO_NOMINATIM,
     TEXT_REGEX_DE, TEXT_REGEX_FR, TEXT_REGEX_IT, TEXT_REGEX_EN,
+    TEXT_GPT_5_4,
     DEFAULT_CONSTANT, CROSS_REF,
     UNKNOWN, DROPPED_BAD_DATA,
     UNKNOWN_PENDING,
