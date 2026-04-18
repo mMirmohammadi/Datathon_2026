@@ -39,3 +39,5 @@ sample_data_enriched/
 
 # Claude Code local settings + scheduler state (machine-local).
 .claude/
+
+report.md
