@@ -30,3 +30,9 @@ enrichment/data/
 # Private research notes / ongoing project context. Reports + plots only for
 # the author's own reference; never pushed.
 _context/
+
+# Colleague-handoff subset exports (regeneratable from DB; large).
+enrichment/exports/
+
+# Claude Code local settings + scheduler state (machine-local).
+.claude/

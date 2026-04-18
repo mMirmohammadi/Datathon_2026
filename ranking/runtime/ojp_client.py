@@ -105,14 +105,19 @@ def _build_ojp_xml(
     dest_place_ref: str | None,
     departure_time_iso: str,
 ) -> str:
-    """Build an OJPTripRequest 2.0 XML body.
+    """Build an OJPTripRequest 2.0 XML body matching the OTD cookbook schema.
+
+    OJP 2.0 changes vs older versions:
+      * `<Name><Text>…</Text></Name>` (not `<LocationName>`)
+      * `<siri:StopPointRef>` (not `<siri:StopPlaceRef>`)
+      * `<DepArrTime>` belongs inside `<Origin>`
 
     Origin is a GeoPosition (the listing's lat/lng). Destination is either a
-    named StopPlaceRef (SLOID or Didok — OJP accepts both) or a free-text
-    location name that OJP resolves internally.
+    named StopPointRef (SLOID or Didok — OJP accepts both) or a free-text
+    name that OJP resolves internally.
     """
     dest_block = (
-        f"<siri:StopPlaceRef>{dest_place_ref}</siri:StopPlaceRef>"
+        f"<siri:StopPointRef>{dest_place_ref}</siri:StopPointRef>"
         if dest_place_ref else ""
     )
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -130,14 +135,14 @@ def _build_ojp_xml(
               <siri:Longitude>{lng}</siri:Longitude>
               <siri:Latitude>{lat}</siri:Latitude>
             </GeoPosition>
-            <LocationName><Text>listing</Text></LocationName>
+            <Name><Text>listing</Text></Name>
           </PlaceRef>
           <DepArrTime>{departure_time_iso}</DepArrTime>
         </Origin>
         <Destination>
           <PlaceRef>
             {dest_block}
-            <LocationName><Text>{_xml_escape(dest_name)}</Text></LocationName>
+            <Name><Text>{_xml_escape(dest_name)}</Text></Name>
           </PlaceRef>
         </Destination>
         <Params>
