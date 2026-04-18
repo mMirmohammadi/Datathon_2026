@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.core.normalize import slug
 from app.db import get_connection
 
 
@@ -18,11 +19,18 @@ class HardFilterParams:
     max_price: int | None = None
     min_rooms: float | None = None
     max_rooms: float | None = None
+    min_area: int | None = None
+    max_area: int | None = None
+    min_floor: int | None = None
+    max_floor: int | None = None
+    min_year_built: int | None = None
+    max_year_built: int | None = None
+    available_from_after: str | None = None
     latitude: float | None = None
     longitude: float | None = None
     radius_km: float | None = None
     features: list[str] | None = None
-    offer_type: str | None = None
+    features_excluded: list[str] | None = None
     object_category: list[str] | None = None
     limit: int = 20
     offset: int = 0
@@ -58,15 +66,17 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
 
     city = _normalize_list(filters.city)
     if city:
-        placeholders = ", ".join("?" for _ in city)
-        where_clauses.append(f"LOWER(city) IN ({placeholders})")
-        params.extend(value.lower() for value in city)
+        slugs = [s for s in (slug(value) for value in city) if s]
+        if slugs:
+            placeholders = ", ".join("?" for _ in slugs)
+            where_clauses.append(f"city_slug IN ({placeholders})")
+            params.extend(slugs)
 
     postal_code = _normalize_list(filters.postal_code)
     if postal_code:
         placeholders = ", ".join("?" for _ in postal_code)
         where_clauses.append(f"postal_code IN ({placeholders})")
-        params.extend(postal_code)
+        params.extend(int(value) for value in postal_code)
 
     if filters.canton:
         where_clauses.append("UPPER(canton) = ?")
@@ -88,9 +98,33 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
         where_clauses.append("rooms <= ?")
         params.append(filters.max_rooms)
 
-    if filters.offer_type:
-        where_clauses.append("UPPER(offer_type) = ?")
-        params.append(filters.offer_type.upper())
+    if filters.min_area is not None:
+        where_clauses.append("area >= ?")
+        params.append(filters.min_area)
+
+    if filters.max_area is not None:
+        where_clauses.append("area <= ?")
+        params.append(filters.max_area)
+
+    if filters.min_floor is not None:
+        where_clauses.append("floor >= ?")
+        params.append(filters.min_floor)
+
+    if filters.max_floor is not None:
+        where_clauses.append("floor <= ?")
+        params.append(filters.max_floor)
+
+    if filters.min_year_built is not None:
+        where_clauses.append("year_built >= ?")
+        params.append(filters.min_year_built)
+
+    if filters.max_year_built is not None:
+        where_clauses.append("year_built <= ?")
+        params.append(filters.max_year_built)
+
+    if filters.available_from_after:
+        where_clauses.append("available_from >= ?")
+        params.append(filters.available_from_after)
 
     object_category = _normalize_list(filters.object_category)
     if object_category:
@@ -105,18 +139,29 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
             if column_name:
                 where_clauses.append(f"{column_name} = 1")
 
+    features_excluded = _normalize_list(filters.features_excluded)
+    if features_excluded:
+        for feature_name in features_excluded:
+            column_name = FEATURE_COLUMN_MAP.get(feature_name)
+            if column_name:
+                where_clauses.append(f"{column_name} = 0")
+
     query = """
         SELECT
             listing_id,
             title,
             description,
             street,
+            house_number,
             city,
+            city_slug,
             postal_code,
             canton,
             price,
             rooms,
             area,
+            floor,
+            year_built,
             available_from,
             latitude,
             longitude,

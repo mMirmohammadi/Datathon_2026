@@ -18,12 +18,16 @@ def create_schema(connection: sqlite3.Connection) -> None:
             title TEXT NOT NULL,
             description TEXT,
             street TEXT,
+            house_number TEXT,
             city TEXT,
-            postal_code TEXT,
+            city_slug TEXT,
+            postal_code INTEGER,
             canton TEXT,
             price INTEGER,
             rooms REAL,
             area REAL,
+            floor INTEGER,
+            year_built INTEGER,
             available_from TEXT,
             latitude REAL,
             longitude REAL,
@@ -118,10 +122,15 @@ def import_csvs(connection: sqlite3.Connection, csv_paths: Iterable[Path]) -> No
 
 def create_indexes(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_city ON listings(city)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_city_slug ON listings(city_slug)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_postal_code ON listings(postal_code)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_canton ON listings(canton)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_price ON listings(price)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_rooms ON listings(rooms)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_area ON listings(area)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_floor ON listings(floor)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_year_built ON listings(year_built)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_available_from ON listings(available_from)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_latitude ON listings(latitude)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_listings_longitude ON listings(longitude)")
     connection.commit()

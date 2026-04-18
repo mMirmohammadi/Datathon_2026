@@ -13,11 +13,36 @@ dependencies = [
     "reverse_geocoder>=1.5.1",
     "pyyaml>=6.0",
     "rapidfuzz>=3.9",
+    "openai>=1.50",
+    "python-dotenv>=1.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3.0,<9.0.0",
+]
+# image_search pipeline (SigLIP 2 embeddings + triage). Heavy ML deps; kept
+# optional so the API harness and CI don't pull ~1 GB of torch on every sync.
+# Install with:   uv sync --group image_search
+image_search = [
+    "torch>=2.2",
+    "transformers>=4.50",
+    "sentencepiece>=0.2",
+    "Pillow>=10.3",
+    "numpy>=1.26",
+]
+
+# Pin a CUDA 12.8 torch wheel on Linux so qolam (RTX 5090, driver 12.8) can use
+# the GPU. Default PyPI torch is built against CUDA 13, which our driver rejects.
+# On Mac we want the default PyPI wheel (MPS support, no CUDA needed).
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
 ]
 
 [build-system]

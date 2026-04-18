@@ -34,5 +34,8 @@ _context/
 # Colleague-handoff subset exports (regeneratable from DB; large).
 enrichment/exports/
 
+# Sample data subset exports (from origin/main).
+sample_data_enriched/
+
 # Claude Code local settings + scheduler state (machine-local).
 .claude/

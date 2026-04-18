@@ -4,11 +4,14 @@ import logging
 from pathlib import Path
 
 from app.db import get_connection
-from app.harness.csv_import import create_indexes, create_schema, import_csvs
+from app.harness.csv_import import create_indexes, create_schema
+from app.harness.enriched_import import import_enriched_csv
 from app.harness.sred_transform import ensure_sred_normalized_csv
 
 
 logger = logging.getLogger(__name__)
+
+ENRICHED_CSV_RELATIVE = Path("sample_data_enriched") / "sample_enriched_500.csv"
 
 
 def bootstrap_database(*, db_path: Path, raw_data_dir: Path) -> None:
@@ -24,22 +27,14 @@ def bootstrap_database(*, db_path: Path, raw_data_dir: Path) -> None:
             return
         return
 
-    csv_paths = _csv_paths(raw_data_dir)
+    enriched_csv_path = raw_data_dir / ENRICHED_CSV_RELATIVE
+    if not enriched_csv_path.exists():
+        raise FileNotFoundError(f"Enriched CSV not found: {enriched_csv_path}")
 
     with get_connection(db_path) as connection:
         create_schema(connection)
-        import_csvs(connection, csv_paths)
+        import_enriched_csv(connection, enriched_csv_path)
         create_indexes(connection)
-
-
-def _csv_paths(raw_data_dir: Path) -> list[Path]:
-    if not raw_data_dir.exists() or not raw_data_dir.is_dir():
-        raise FileNotFoundError(f"Raw data directory not found: {raw_data_dir}")
-
-    csv_paths = sorted(path for path in raw_data_dir.glob("*.csv") if path.is_file())
-    if not csv_paths:
-        raise FileNotFoundError(f"No CSV files found in raw data directory: {raw_data_dir}")
-    return csv_paths
 
 
 def _schema_matches(db_path: Path) -> bool:
@@ -50,6 +45,10 @@ def _schema_matches(db_path: Path) -> bool:
         "platform_id",
         "scrape_source",
         "street",
+        "house_number",
+        "city_slug",
+        "floor",
+        "year_built",
         "object_type",
         "feature_wheelchair_accessible",
         "feature_private_laundry",
