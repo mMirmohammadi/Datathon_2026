@@ -1,9 +1,10 @@
+"""Delegator: natural-language query → HardFilters via QueryPlan."""
 from __future__ import annotations
 
 from app.models.schemas import HardFilters
+from app.participant.query_plan import get_plan, queryplan_to_hard_filters
 
 
 def extract_hard_facts(query: str) -> HardFilters:
-    # Intentionally stubbed. Teams are expected to replace this with
-    # their own query understanding or structured extraction logic.
-    return HardFilters()
+    plan = get_plan(query)
+    return queryplan_to_hard_filters(plan)

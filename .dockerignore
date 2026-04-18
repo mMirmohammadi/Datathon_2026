@@ -4,3 +4,10 @@
 __pycache__
 *.pyc
 data/
+
+# Large image assets — mounted at runtime via volumes, not baked into image
+raw_data/structured_data_images/
+raw_data/robinreal_images/
+raw_data/s3/
+raw_data.zip
+eval/report_mvp.md

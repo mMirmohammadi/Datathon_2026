@@ -72,3 +72,44 @@ class ListingsResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class NumRange(BaseModel):
+    min_value: float | None = None
+    max_value: float | None = None
+
+
+class Feature(BaseModel):
+    name: str
+    required: bool = True
+
+
+class SoftPreferences(BaseModel):
+    keywords: list[str] = Field(default_factory=list)
+    negatives: list[str] = Field(default_factory=list)
+    price_sentiment: Literal["cheap", "moderate", "premium"] | None = None
+    features: list[Feature] = Field(default_factory=list)
+
+
+class QueryPlan(BaseModel):
+    city: list[str] | None = None
+    postal_code: list[str] | None = None
+    canton: str | None = None
+    price: NumRange = Field(default_factory=NumRange)
+    rooms: NumRange = Field(default_factory=NumRange)
+    latitude: float | None = None
+    longitude: float | None = None
+    radius_km: float | None = None
+    offer_type: str | None = None
+    object_category: list[str] | None = None
+    required_features: list[str] = Field(default_factory=list)
+
+    soft: SoftPreferences = Field(default_factory=SoftPreferences)
+
+    rewrites: list[str] = Field(default_factory=list, max_length=3)
+
+    raw_query: str
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    clarification_needed: bool = False
+    clarification_question: str | None = None

@@ -1,0 +1,15 @@
+{"qid": "c1", "stratum": "clear_hard", "lang": "en", "query": "3-room bright apartment in Zurich under 2800 CHF with balcony, close to public transport", "must_satisfy": {"city": "Zürich", "rooms": 3.0, "max_price": 2800, "required_features": ["balcony"]}}
+{"qid": "c2", "stratum": "clear_hard", "lang": "de", "query": "Helle 3.5-Zimmer-Wohnung in Zürich, nah am Bahnhof, max 2800 CHF", "must_satisfy": {"city": "Zürich", "rooms": 3.5, "max_price": 2800}}
+{"qid": "c3", "stratum": "clear_hard", "lang": "en", "query": "2 to 3.5 room apartment in Basel, no basement, with elevator", "must_satisfy": {"city": "Basel", "min_rooms": 2.0, "max_rooms": 3.5, "required_features": ["elevator"]}}
+{"qid": "s1", "stratum": "soft_heavy", "lang": "en", "query": "Modern studio in Geneva for June move-in, quiet area, nice views if possible", "must_satisfy": {"city": "Genève"}}
+{"qid": "s2", "stratum": "soft_heavy", "lang": "en", "query": "Bright family-friendly flat in Winterthur, not too expensive, ideally with parking", "must_satisfy": {"city": "Winterthur", "required_features": ["child_friendly"]}}
+{"qid": "s3", "stratum": "soft_heavy", "lang": "fr", "query": "Cherche studio moderne à Genève, plutôt calme, autour de 1500 CHF", "must_satisfy": {"city": "Genève"}}
+{"qid": "m1", "stratum": "multilingual", "lang": "it", "query": "Cerco un bilocale a Lugano con balcone, max 2000 CHF", "must_satisfy": {"city": "Lugano", "rooms": 2.0, "max_price": 2000, "required_features": ["balcony"]}}
+{"qid": "m2", "stratum": "multilingual", "lang": "de", "query": "4.5-Zimmer-Wohnung in Bern mit Lift, unter 3500 Fr., möglichst modern", "must_satisfy": {"city": "Bern", "rooms": 4.5, "max_price": 3500, "required_features": ["elevator"]}}
+{"qid": "m3", "stratum": "multilingual", "lang": "fr", "query": "appartement 2 pièces à Lausanne avec balcon, maximum 2200 CHF", "must_satisfy": {"city": "Lausanne", "rooms": 2.0, "max_price": 2200, "required_features": ["balcony"]}}
+{"qid": "l1", "stratum": "landmark", "lang": "en", "query": "affordable student accommodation near ETH Zurich, modern kitchen preferred", "must_satisfy": {"city": "Zürich"}}
+{"qid": "l2", "stratum": "landmark", "lang": "en", "query": "apartment close to Zurich Hauptbahnhof, 2-3 rooms, around 2500 CHF", "must_satisfy": {"city": "Zürich", "min_rooms": 2.0, "max_rooms": 3.0}}
+{"qid": "a1", "stratum": "adversarial", "lang": "en", "query": "5 rooms in Geneva under CHF 500", "must_satisfy": {}, "expect_relaxation": true}
+{"qid": "a2", "stratum": "adversarial", "lang": "en", "query": "nice flat", "must_satisfy": {}, "expect_clarification": true}
+{"qid": "a3", "stratum": "adversarial", "lang": "en", "query": "Zuerich 3 room balkony under 2800", "must_satisfy": {"city": "Zürich", "rooms": 3.0, "max_price": 2800}}
+{"qid": "a4", "stratum": "adversarial", "lang": "en", "query": "big loft with mountain view in St. Moritz, no ground floor, with fireplace", "must_satisfy": {"required_features": ["fireplace"]}}

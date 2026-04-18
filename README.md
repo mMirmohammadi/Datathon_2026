@@ -1,4 +1,63 @@
-# Datathon 2026 Challenge Harness
+# Datathon 2026 · Robin Hybrid Listing Search
+
+> **🌍 Live API (MVP)** — `https://tries-predict-identical-employer.trycloudflare.com`
+>
+> ```bash
+> curl -X POST https://tries-predict-identical-employer.trycloudflare.com/listings \
+>   -H 'content-type: application/json' \
+>   -d '{"query":"3-room bright apartment in Zurich under 2800 CHF with balcony","limit":5}'
+> ```
+>
+> _Default endpoint: `POST /listings` · `GET /health` · `POST /listings/search/filter`. URL is a
+> no-login Cloudflare quick tunnel — if down, run `npx cloudflared tunnel --url http://localhost:8000`
+> after `docker compose up`._
+
+## MVP overview
+
+Natural-language query → Claude `QueryPlan` (forced tool-use, strict JSON, multilingual
+rewrites) → **SQL hard-filter GATE** → **BM25 (FTS5) over the allowed set** →
+**4+1 signal linear rank** → **relaxation ladder** if zero hits. Every fallback path
+emits a `[WARN]` log; no silent degradation.
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — full v2 architecture (dense + rerank + enrichment + eval methodology)
+- **[baseline_mvp.md](baseline_mvp.md)** — scope of this MVP baseline
+- **[docs/pipeline-flowchart.md](docs/pipeline-flowchart.md)** — rendered PNG flowcharts
+- **[eval/report_mvp.md](eval/report_mvp.md)** — latest 15-query eval output
+
+### Quick start
+
+```bash
+# Conda env (matches environment.yml)
+conda env create -f environment.yml
+conda activate datathon2026
+
+# .env (needs ANTHROPIC_API_KEY at minimum; AWS creds for S3 images)
+cp .env.example .env  # then edit
+
+# DB + FTS bootstrap happens automatically on first request
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Eval
+python scripts/eval_mvp.py --out eval/report_mvp.md
+```
+
+Or with docker:
+
+```bash
+docker compose up --build -d
+curl http://localhost:8000/health
+```
+
+### Latest eval headline (15 stratified queries)
+
+| Metric                                | Value     | Target                                           |
+| ------------------------------------- | --------- | ------------------------------------------------ |
+| HF-P (hard-filter precision, overall) | **1.000** | ≥ 0.85                                           |
+| CSR (constraint satisfaction, strict) | **1.000** | ≥ 0.70                                           |
+| Coverage (≥5 hits)                    | 0.867     | ≥ 0.90                                           |
+| p50 latency                           | 6.3 s     | < 2.5 s (bottleneck: Claude call; v2 caches)     |
+
+## Starter harness context
 
 This repository is a minimal starter harness for participants building listing search and ranking systems.
 

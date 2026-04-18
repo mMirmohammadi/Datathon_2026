@@ -1,0 +1,9 @@
+name: datathon2026
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -e .
+      - pytest>=8.3.0
