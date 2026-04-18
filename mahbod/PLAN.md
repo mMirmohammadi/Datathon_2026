@@ -41,6 +41,48 @@
 
 ---
 
+## Data sources — organizer guidance (authoritative)
+
+Transcribed from the organizer welcome message. Treat as the authoritative priority order when tradeoffs arise.
+
+### CSV priority (best → worst)
+
+| Rank | File | Rows | Features populated? | Images | Use it for |
+|---|---|---|---|---|---|
+| 1 | `raw_data/robinreal_data_withimages-1776461278845.csv` | 797 | yes (`prop_*` flags) | S3 URLs, multi per listing, **HQ** | ranking demos, image-based signals, feature-heavy queries |
+| 2 | `raw_data/structured_data_withimages-1776412361239.csv` | 4,160 | partial (~11% child_friendly only) | S3 URLs, multi per listing, **HQ** | volume of HQ images, broad coverage |
+| 3 | `raw_data/sred_data_withmontageimages_latlong.csv` | 11,105 | none | 1 local **low-quality** montage per listing at `raw_data/sred_images/{id}.jpeg` | geographic coverage (lat/lng 100%), fallback; organizer explicitly called these "low quality" |
+| 4 | `raw_data/structured_data_withoutimages-1776412361239.csv` | 6,757 | none | none | text-only signal |
+
+**Implication for ranking + demo:** prioritize listings from ranks 1-2 when showcasing the image-quality component (`img_brightness/modernity/view/spaciousness/family_friendly`). SRED remains essential for geographic breadth but its montages should not carry the demo. PLAN §2 `scripts/enrich_images.py` still uses SRED montages first because they're already on disk (no download), but image-score tuning should be validated on rank-1/2 data.
+
+### S3 image trees (organizer-provided)
+
+Bucket `s3://crawl-data-951752554117-eu-central-2-an`, region `eu-central-2`, prefix `prod/`:
+
+- `prod/comparis/images/` — full-res images for the two `structured_*` CSVs (COMPARIS source).
+- `prod/robinreal/images/` — full-res images for the `robinreal_*` CSV.
+
+Credentials live in `/Users/mahbod/Desktop/Datathon_2026/.env` (gitignored, see `.gitignore:7`). Env vars required: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION=eu-central-2`.
+
+**Optional bulk local copy** (organizer commands, one-time):
+```bash
+set -a; source .env; set +a
+aws s3 cp "s3://crawl-data-951752554117-eu-central-2-an/prod/comparis/images/"  ./raw_data/structured_data_images  --recursive
+aws s3 cp "s3://crawl-data-951752554117-eu-central-2-an/prod/robinreal/images/" ./raw_data/robinreal_images         --recursive
+```
+
+**Server-side per-listing lookup** is already implemented in `app/core/s3.py:get_image_urls_by_listing_id()` — reads the same env vars via the standard AWS credential chain. For SRED it returns the local montage; for COMPARIS/ROBINREAL it lists the S3 prefix `prod/<source>/images/platform_id={platform_id}/`. No code change needed to consume these images at query time.
+
+### Other organizer pointers (verbatim)
+
+- DB schemas: `app/models/schemas.py`.
+- CSV → SQLite normalization (adjustable if we want more extraction at ingest): `app/harness/csv_import.py`.
+- Where we plug filtering + ranking: `app/participant/` (stubs + `listing_row_parser.py`).
+- README and challenge.md contain MCP App UI setup (already read by PLAN §7 Deploy).
+
+---
+
 ## Architecture at a glance
 
 ```
