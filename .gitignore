@@ -9,6 +9,9 @@ __pycache__/
 
 raw_data/
 data/
+.env
+.env.*
+!.env.example
 *.db
 *.sqlite
 *.sqlite3
