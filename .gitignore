@@ -26,3 +26,7 @@ raw_data/
 # Enrichment-pipeline generated artefacts (caches, run reports, disagreement dumps).
 # Source code stays tracked; only the data it produces is gitignored.
 enrichment/data/
+
+# Private research notes / ongoing project context. Reports + plots only for
+# the author's own reference; never pushed.
+_context/
