@@ -98,7 +98,7 @@ Python 3.12 · FastAPI · SQLite (FTS5) · Snowflake Arctic-Embed-L v2 · Google
 | [`image_search/`](image_search/) | SigLIP-2 + DINOv2 indexes over 70,548 photos · [README](image_search/README.md) |
 | [`analysis/`](analysis/) | v2 data audit (`REPORT_v2.md`, 19 plots, `stats_v2.json`) |
 | [`docs/`](docs/) | Installation · Usage · Development · Deployment · Reports |
-| [`tests/`](tests/) | 39 integration test files · run: `uv run pytest -q` |
+| [`tests/`](tests/) | 34 integration test files · run: `uv run pytest -q` |
 | [`scripts/`](scripts/) | Ops scripts — dataset install, DB migration, MCP smoke |
 | [`presentation/`](presentation/) | Typst pitch deck |
 

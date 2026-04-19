@@ -17,7 +17,7 @@ user query
 
 No silent fallback. No regex fallback. No LLM cache. On any failure in the LLM call (missing key, SDK error, malformed JSON, schema-invalid payload) we emit a `[WARN]` per CLAUDE.md §5 and re-raise.
 
-The DB source is [`raw_data/sample_data_enriched/sample_enriched_500.csv`](../raw_data/sample_data_enriched/sample_enriched_500.csv) (500 rows, teammate-produced clean subset). The legacy multi-CSV loader is still in the tree but unreferenced from `bootstrap.py`.
+The DB source is `raw_data/sample_data_enriched/sample_enriched_500.csv` (500 rows, teammate-produced clean subset; not committed — see [docs/DATASET.md](DATASET.md)). The legacy multi-CSV loader is still in the tree but unreferenced from `bootstrap.py`.
 
 Test suite: **123 tests, 5.8 s, green**.
 
@@ -74,7 +74,7 @@ Fix: translate once at import into a 29-entry English canonical enum. The LLM JS
 
 ### 2.3 Real queries mix hard + soft in the same sentence
 
-From the 26 real queries in [`long_queries.md`](../long_queries.md), [`queries_de.md`](../queries_de.md), and [`challenge.md`](../challenge.md), I pulled these recurring constraints (and what the plan did with each):
+From the 26 real queries in [`tests/fixtures/queries_de.md`](../tests/fixtures/queries_de.md) and [`docs/CHALLENGE.md`](CHALLENGE.md), I pulled these recurring constraints (and what the plan did with each):
 
 | Phrase pattern | Schema field | Handled |
 |---|---|---|

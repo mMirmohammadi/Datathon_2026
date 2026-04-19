@@ -63,7 +63,7 @@ All 30 columns live in [`ranking/schema.py:26-252`](schema.py). Every column is 
 ### Price (8) — [`t1_price_baselines.py`](scripts/t1_price_baselines.py), [`t1_signal_hardening.py`](scripts/t1_signal_hardening.py)
 
 | Column | Type | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `price_baseline_chf_canton_rooms` | REAL | Median rent for this (canton, rooms) bucket |
 | `price_baseline_chf_plz_rooms` | REAL | Median rent for this (PLZ-prefix, rooms) bucket |
 | `price_delta_pct_canton_rooms` | REAL | `(price − baseline) / baseline` — signed |
@@ -76,7 +76,7 @@ All 30 columns live in [`ranking/schema.py:26-252`](schema.py). Every column is 
 ### Geo / transit (6) — [`t2_gtfs_nearest.py`](scripts/t2_gtfs_nearest.py)
 
 | Column | Type | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `dist_nearest_stop_m` | REAL | Haversine metres to nearest GTFS stop |
 | `nearest_stop_name` | TEXT | SBB stop_name |
 | `nearest_stop_id` | TEXT | GTFS stop_id (or parent_station) |
@@ -89,7 +89,7 @@ All 30 columns live in [`ranking/schema.py:26-252`](schema.py). Every column is 
 Counts are over the Switzerland OSM extract; distances are EPSG:2056 projected.
 
 | Column | Type | Radius / class |
-|---|---|---|
+| --- | --- | --- |
 | `poi_supermarket_300m` / `_1km` | INT | OSM `shop=supermarket` |
 | `poi_school_1km` | INT | OSM `amenity=school` |
 | `poi_kindergarten_500m` | INT | `amenity=kindergarten` |
@@ -106,7 +106,7 @@ Counts are over the Switzerland OSM extract; distances are EPSG:2056 projected.
 ### Embedding metadata (3) — [`t3_embed_listings.py`](scripts/t3_embed_listings.py)
 
 | Column | Type | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `embedding_row_index` | INT | Row index into [`data/ranking/embeddings.fp16.npy`](../data/ranking/embeddings.fp16.npy) |
 | `embedding_model` | TEXT | HF model id — currently `Snowflake/snowflake-arctic-embed-l-v2.0` |
 | `embedding_doc_hash` | TEXT | SHA-256 over the embedded text (for re-embed invalidation) |
@@ -118,7 +118,7 @@ Counts are over the Switzerland OSM extract; distances are EPSG:2056 projected.
 11 scripts in [`ranking/scripts/`](scripts/). All idempotent (`INSERT OR REPLACE`), runnable independently.
 
 | Script | Tier | What it produces |
-|---|---|---|
+| --- | --- | --- |
 | [`t1_create_table.py`](scripts/t1_create_table.py) | 1.1 | Creates `listings_ranking_signals`; emits `[WARN]` on schema drift |
 | [`t1_price_baselines.py`](scripts/t1_price_baselines.py) | 1.2 | Per-segment medians (min 5 listings per bucket) |
 | [`t1_landmarks_fetch.py`](scripts/t1_landmarks_fetch.py) | 1.3 | Nominatim forward-geocode for canonical landmarks |
@@ -138,7 +138,7 @@ Counts are over the Switzerland OSM extract; distances are EPSG:2056 projected.
 Query-time helpers in [`ranking/runtime/`](runtime/). Zero offline deps at import time.
 
 | File | Purpose | Imported by |
-|---|---|---|
+| --- | --- | --- |
 | [`embedding_search.py`](runtime/embedding_search.py) | Cosine top-k over the Arctic matrix; 50 MB fp16 loaded once per process | [`app/core/text_embed_search.py`](../app/core/text_embed_search.py) |
 | [`signals_reader.py`](runtime/signals_reader.py) | Batched SELECT that attaches all signals to a candidate list | Direct SQL in [`app/core/soft_signals.py`](../app/core/soft_signals.py) |
 | [`ojp_client.py`](runtime/ojp_client.py) | Swiss OJP 2.0 client for live transit queries; 50 req/min tier | On-demand; not in request critical path |

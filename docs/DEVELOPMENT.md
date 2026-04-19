@@ -7,7 +7,7 @@ How to test, rebuild indexes, add a new ranking signal, and work on the MCP app.
 ## Running tests
 
 ```bash
-uv run pytest -q                   # all 39 integration test files
+uv run pytest -q                   # all 34 integration test files
 uv run pytest tests/ -q            # FastAPI + API layer
 uv run pytest enrichment/tests -q  # 307 enrichment tests
 uv run pytest ranking/tests -q     # 7 ranking unit tests
@@ -29,7 +29,7 @@ Test layout:
 | [`enrichment/tests/unit/`](../enrichment/tests/) | Pure functions — regex / NegEx / schema / validators | 1-2 s |
 | [`enrichment/tests/integration/`](../enrichment/tests/) | Each pass against an in-memory SQLite | ~5 min for 307 total |
 | [`ranking/tests/unit/`](../ranking/tests/) | Price math · diversify · schema · landmarks · OJP · signals reader | ~1 s |
-| [`image_search/tests/unit/`](../image_search/tests/) | SRED split (pixel-exact SHA-256) · triage decision logic · embed · store safety-net · GeM · DINOv2 transform | ~2 s |
+| [`image_search/tests/unit/`](../image_search/tests/) | 14 files — SRED split (pixel-exact SHA-256) · triage logic · embed · store safety-net · GeM · DINOv2 transform | ~2 s |
 
 ---
 

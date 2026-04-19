@@ -1,15 +1,12 @@
-# Datathon-2026 — runtime dataset bundle
+# Dataset bundle
 
-**Give this README to Claude Code with the zip open; it will place every file in the exact path the running website expects.**
+Pre-built runtime artifacts — DB, embeddings, landmarks — so you don't have to rebuild from raw CSVs. Extract at the repo root; every path inside the zip is already repo-relative.
 
 ---
 
-## TL;DR for Claude (deterministic install steps)
-
-Open the zip next to the repo root (named `Datathon_2026` in git, same folder that contains `app/`, `ranking/`, `image_search/`, `enrichment/`, `analysis/`). Then run:
+## Install
 
 ```bash
-# 1. extract the zip INSIDE the repo root (paths in the zip are already repo-relative)
 cd /path/to/Datathon_2026
 unzip -o datathon2026_dataset.zip
 
@@ -35,7 +32,7 @@ for tbl, want in [('listings', 25546), ('listings_enriched', 25546),
     print(f'{tbl}: got={got} want={want} {\"OK\" if got == want else \"MISMATCH\"}')"
 ```
 
-If any of the 10 `test -f` lines are missing — the zip was incomplete. Do NOT proceed, re-request the bundle.
+If any `test -f` line prints nothing — the zip was incomplete. Stop and re-download.
 
 ---
 
@@ -48,7 +45,7 @@ All paths below are **repo-relative** — they match the zip's internal structur
 The single source of truth for the website. Contains 4 tables:
 
 | table | rows | what's it for |
-|---|---:|---|
+| --- | ---: | --- |
 | `listings` | 25,546 | raw corpus (Comparis + SRED + ROBINREAL) |
 | `listings_enriched` | 25,546 | 41 fields × 4 provenance cols (pass 0-3 + pass 2b) |
 | `listings_ranking_signals` | 25,546 | 30 derived ranking signals |
@@ -58,7 +55,7 @@ Consumed by: [`app/config.py:30`](../app/config.py#L30), all of `ranking/`, all 
 
 ### 2. Arctic-Embed text embeddings
 
-```
+```text
 data/ranking/embeddings.fp16.npy     (50 MB, shape (25546, 1024), float16)
 data/ranking/embeddings_ids.json     (260 KB — listing_id ↔ row-index map)
 ```
@@ -67,7 +64,7 @@ Consumed by [`ranking/runtime/embedding_search.py:28-29`](../ranking/runtime/emb
 
 ### 3. Landmarks gazetteer
 
-```
+```text
 data/ranking/landmarks.json                    (24 KB — 45 curated Swiss landmarks: unis, HBs, lakes, employers)
 data/ranking/landmarks_mined_candidates.json   (16 KB — GPT-5.4-nano proposals, kept for provenance)
 ```
@@ -76,7 +73,7 @@ Consumed by [`app/core/landmarks.py:24`](../app/core/landmarks.py#L24) and the r
 
 ### 4. SigLIP-2 Giant image embeddings (primary visual search)
 
-```
+```text
 image_search/data/full/store/embeddings.fp32.npy   (414 MB — listing images)
 image_search/data/full/store/floorplans.fp32.npy   (3.7 MB — floorplan images)
 image_search/data/full/store/index.sqlite          (23 MB — image_id ↔ row-index map)
@@ -86,7 +83,7 @@ Consumed by [`app/core/visual_search.py:82-84`](../app/core/visual_search.py#L82
 
 ### 5. DINOv2-Giant image embeddings (re-ranker)
 
-```
+```text
 image_search/data/full/dinov2_store/main.fp32.npy        (276 MB — 1024-d global descriptors)
 image_search/data/full/dinov2_store/floorplans.fp32.npy  (2.5 MB)
 image_search/data/full/dinov2_store/index.sqlite         (8.4 MB)
@@ -110,16 +107,18 @@ Consumed by [`app/core/dinov2_search.py:37-38`](../app/core/dinov2_search.py#L37
 
 ```bash
 # 1. launch the app
-python -m uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 
-# 2. hit the health check (expected: 200 OK with all 5 indexes loaded)
-curl -s http://localhost:8000/api/health | python -m json.tool
+# 2. health check
+curl -s http://localhost:8000/health
 
-# 3. run a semantic search (expected: non-empty results list)
-curl -s "http://localhost:8000/api/search?q=modern+bright+apartment+near+HB+Zurich" | head
+# 3. natural-language query
+curl -s -X POST http://localhost:8000/listings \
+     -H content-type:application/json \
+     -d '{"query":"modern bright apartment near HB Zurich","limit":5}'
 ```
 
-If `app.main:app` logs `[WARN] dinov2_load_failed` the DINOv2 store didn't land at [`image_search/data/full/dinov2_store/`](../image_search/data/full/dinov2_store/) — re-check step 2 of the TL;DR.
+If startup logs `[WARN] dinov2_load_failed` the DINOv2 store didn't land at [`image_search/data/full/dinov2_store/`](../image_search/data/full/dinov2_store/) — re-check step 2.
 
 ---
 

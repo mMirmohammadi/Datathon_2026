@@ -78,7 +78,7 @@ Required (otherwise startup degrades with `[WARN]` logs):
 
 | Variable | Used by | Notes |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | [`app/participant/hard_fact_extraction.py`](../app/participant/hard_fact_extraction.py) · [`enrichment/scripts/pass2_gpt_extract.py`](../enrichment/scripts/pass2_gpt_extract.py) | Without this, query understanding falls back to a regex fallback |
+| `OPENAI_API_KEY` | [`app/participant/hard_fact_extraction.py`](../app/participant/hard_fact_extraction.py) · [`enrichment/scripts/pass2_gpt_extract.py`](../enrichment/scripts/pass2_gpt_extract.py) | Required for `/listings` query understanding — raises at runtime if unset |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | [`app/core/s3.py`](../app/core/s3.py) | Resolves image URLs; listings still return without it |
 | `NOMINATIM_CONTACT_EMAIL` | [`enrichment/scripts/pass1b_nominatim.py`](../enrichment/scripts/pass1b_nominatim.py) | Required for any live geocoding — [OSM policy](https://operations.osmfoundation.org/policies/nominatim/) |
 
