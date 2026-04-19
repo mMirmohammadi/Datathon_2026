@@ -37,6 +37,25 @@ _INTERP_OK = "ok"
 _INTERP_POOR = "poor"
 _INTERP_UNKNOWN = "unknown"
 
+# Default "nearby landmarks" context — emitted for every listing, even when
+# the user's query doesn't explicitly ask for proximity to anything. Shows
+# the top-N nearest entries within a useful radius so the UI surfaces things
+# like "HB Zurich: 2 km, ETH: 3 km, Zurichsee: 1 km" as context the user
+# cares about regardless of what they typed.
+_NEARBY_LANDMARK_COUNT = 3
+# 50 km cap is generous enough to give rural listings SOME reference-point
+# context (e.g. a Locarno listing → HB Lugano at ~40 km), while urban
+# listings are unaffected because they always have closer landmarks that
+# win the top-3 slots by ascending-distance ranking.
+_NEARBY_LANDMARK_MAX_M = 50_000
+# Kinds we trust as geographic-reference landmarks. `neighborhood` and
+# `cultural` come from GPT-mined entries whose coordinates resolve to a
+# single generic point (e.g. the cultural `altstadt` snaps to one
+# specific old-town centre, misleading for listings in a different city).
+_NEARBY_LANDMARK_KINDS = frozenset({
+    "transit", "university", "employer", "oldtown", "lake",
+})
+
 
 def _fmt_m(value: float | int | None) -> str:
     if value is None:
@@ -565,6 +584,81 @@ def _landmark_fact(
     )
 
 
+def _nearby_landmark_facts(
+    row: sqlite3.Row | None,
+    *,
+    exclude_keys: set[str],
+    commute_rows: dict[tuple[str, str], int] | None = None,
+    listing_id: str | None = None,
+) -> list[MatchFact]:
+    """Top-N nearest well-known landmarks as informational context.
+
+    Emitted for every listing so "Distance to HB Zurich · 2.1 km" shows up
+    even when the user didn't ask for proximity to anything specific. Skips:
+
+    - landmarks the caller already emitted via the explicit
+      ``soft.near_landmark`` path (``exclude_keys``) so we never double-show,
+    - landmarks of kinds outside the trusted allowlist (avoids the few
+      GPT-mined generic entries whose single-point coordinates would
+      mislead on far-away listings),
+    - landmarks beyond ``_NEARBY_LANDMARK_MAX_M`` (low-signal at that range),
+    - signal-row-less listings (nothing to measure).
+
+    Interpretation mirrors the explicit-landmark path: <1.5 km is "good",
+    up to the max radius is "ok". We never emit "poor" here — these are
+    informational facts, not requested constraints.
+    """
+    if row is None:
+        return []
+    ranked: list[tuple[landmarks.Landmark, float]] = []
+    for lm in landmarks.all_landmarks():
+        if lm.key in exclude_keys:
+            continue
+        if lm.kind not in _NEARBY_LANDMARK_KINDS:
+            continue
+        raw = _safe(row, landmarks.column_for(lm.key))
+        if raw is None:
+            continue
+        try:
+            d = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if d < 0 or d > _NEARBY_LANDMARK_MAX_M:
+            continue
+        ranked.append((lm, d))
+    ranked.sort(key=lambda t: t[1])
+    if not ranked:
+        return []
+
+    facts: list[MatchFact] = []
+    for lm, dist_m in ranked[:_NEARBY_LANDMARK_COUNT]:
+        display = lm.aliases[0] if lm.aliases else lm.key.replace("_", " ").title()
+        transit_min: int | None = None
+        if commute_rows and listing_id is not None:
+            transit_min = commute_rows.get((listing_id, lm.key))
+
+        parts: list[str] = [_fmt_m(dist_m)]
+        if transit_min is not None:
+            parts.append(f"{int(transit_min)} min by transit")
+
+        # Informational — never "poor". Anything within the 20 km radius is
+        # at worst "ok" context; only genuinely-close hits get "good".
+        if transit_min is not None and transit_min <= 15:
+            interp = _INTERP_GOOD
+        elif transit_min is None and dist_m <= 1500:
+            interp = _INTERP_GOOD
+        else:
+            interp = _INTERP_OK
+
+        facts.append(MatchFact(
+            axis=f"landmark_{lm.key}",
+            label=f"Distance to {display}",
+            value=" · ".join(parts),
+            interpretation=interp,
+        ))
+    return facts
+
+
 def _build_soft_facts(
     row: sqlite3.Row | None,
     soft: SoftPreferences | None,
@@ -572,45 +666,59 @@ def _build_soft_facts(
     commute_rows: dict[tuple[str, str], int] | None = None,
     listing_id: str | None = None,
 ) -> list[MatchFact]:
-    if soft is None:
-        return []
     facts: list[MatchFact] = []
+    # Track landmarks the user explicitly requested so the generic
+    # nearby-landmark pass doesn't double-emit them.
+    explicit_landmark_keys: set[str] = set()
 
-    if soft.price_sentiment in ("cheap", "premium"):
-        facts.append(_price_fact(row, soft.price_sentiment))
-    if soft.quiet:
-        facts.append(_quiet_fact(row))
-    if soft.near_public_transport:
-        facts.append(_transit_fact(row))
-    if soft.commute_target:
-        facts.append(_commute_fact(
-            row, soft.commute_target,
-            commute_rows=commute_rows, listing_id=listing_id,
-        ))
-    if soft.near_schools:
-        facts.append(_poi_fact(
-            row, "near_schools", "Schools within 1 km",
-            "poi_school_1km", good_at=3, ok_at=1,
-        ))
-    if soft.near_supermarket:
-        facts.append(_poi_fact(
-            row, "near_supermarket", "Supermarkets within 300 m",
-            "poi_supermarket_300m", good_at=2, ok_at=1,
-        ))
-    if soft.near_park:
-        facts.append(_poi_fact(
-            row, "near_park", "Parks within 500 m",
-            "poi_park_500m", good_at=2, ok_at=1,
-        ))
-    if soft.family_friendly:
-        facts.append(_family_fact(row))
-    for name in soft.near_landmark or []:
-        fact = _landmark_fact(
-            row, name,
-            commute_rows=commute_rows, listing_id=listing_id,
-        )
-        if fact is not None:
-            facts.append(fact)
+    if soft is not None:
+        if soft.price_sentiment in ("cheap", "premium"):
+            facts.append(_price_fact(row, soft.price_sentiment))
+        if soft.quiet:
+            facts.append(_quiet_fact(row))
+        if soft.near_public_transport:
+            facts.append(_transit_fact(row))
+        if soft.commute_target:
+            facts.append(_commute_fact(
+                row, soft.commute_target,
+                commute_rows=commute_rows, listing_id=listing_id,
+            ))
+        if soft.near_schools:
+            facts.append(_poi_fact(
+                row, "near_schools", "Schools within 1 km",
+                "poi_school_1km", good_at=3, ok_at=1,
+            ))
+        if soft.near_supermarket:
+            facts.append(_poi_fact(
+                row, "near_supermarket", "Supermarkets within 300 m",
+                "poi_supermarket_300m", good_at=2, ok_at=1,
+            ))
+        if soft.near_park:
+            facts.append(_poi_fact(
+                row, "near_park", "Parks within 500 m",
+                "poi_park_500m", good_at=2, ok_at=1,
+            ))
+        if soft.family_friendly:
+            facts.append(_family_fact(row))
+        for name in soft.near_landmark or []:
+            lm = landmarks.resolve(name)
+            if lm is not None:
+                explicit_landmark_keys.add(lm.key)
+            fact = _landmark_fact(
+                row, name,
+                commute_rows=commute_rows, listing_id=listing_id,
+            )
+            if fact is not None:
+                facts.append(fact)
+
+    # Always surface the 3 nearest trusted landmarks as context, regardless
+    # of whether the query mentioned any.
+    facts.extend(_nearby_landmark_facts(
+        row,
+        exclude_keys=explicit_landmark_keys,
+        commute_rows=commute_rows,
+        listing_id=listing_id,
+    ))
     return facts
 
 

@@ -168,6 +168,125 @@ def test_unknown_landmark_yields_unknown_fact_not_skipped() -> None:
     # Silent-disable is forbidden; the fact is emitted even though unresolved.
 
 
+def _make_landmark_row(**overrides: Any) -> sqlite3.Row:
+    """Signal row with a handful of `dist_landmark_<key>_m` columns so the
+    nearby-landmark pass has real data to sort. Defaults mirror the
+    distances a Zurich-centre listing would see: HB very close, ETH close,
+    Zurichsee close, others further out."""
+    base = {
+        "dist_landmark_hb_zurich_m": 600.0,
+        "dist_landmark_eth_zentrum_m": 1300.0,
+        "dist_landmark_zurichsee_m": 800.0,
+        "dist_landmark_altstadt_zurich_m": 400.0,
+        "dist_landmark_hb_bern_m": 120_000.0,  # outside the 20 km radius
+        "dist_landmark_plainpalais_m": 200.0,  # close but kind=neighborhood (skipped)
+        "dist_landmark_altstadt_m": 100.0,     # close but kind=cultural (skipped)
+    }
+    base.update(overrides)
+    return _make_row(base)
+
+
+def test_nearby_landmarks_emitted_without_explicit_request() -> None:
+    """Top-N nearest trusted landmarks show up even with no `near_landmark`."""
+    listing = _listing()
+    hard = HardFilters(soft_preferences=SoftPreferences())  # no explicit landmark
+    row = _make_landmark_row()
+    md = build_match_detail(listing=listing, hard=hard, signal_row=row)
+
+    landmark_facts = [f for f in md.soft_facts if f.axis.startswith("landmark_")]
+    assert len(landmark_facts) == 3, (
+        f"expected top-3 nearest landmarks, got {len(landmark_facts)}: "
+        f"{[f.axis for f in landmark_facts]}"
+    )
+    # Ordered by ascending Haversine distance in the seed row.
+    assert landmark_facts[0].axis == "landmark_altstadt_zurich"  # 400 m
+    assert landmark_facts[1].axis == "landmark_hb_zurich"        # 600 m
+    assert landmark_facts[2].axis == "landmark_zurichsee"        # 800 m
+    # 400 m is under the 1.5 km "good" threshold; 600 m too; 800 m too.
+    for f in landmark_facts:
+        assert f.interpretation == "good", (
+            f"{f.axis} @ {f.value!r} should be good (<1.5 km), got {f.interpretation}"
+        )
+
+
+def test_nearby_landmarks_respect_kind_allowlist() -> None:
+    """`neighborhood` + `cultural` entries are skipped even when closest."""
+    listing = _listing()
+    hard = HardFilters(soft_preferences=SoftPreferences())
+    # plainpalais (neighborhood) @ 200 m, altstadt (cultural) @ 100 m are
+    # closer than anything else but must not appear in the nearby list.
+    row = _make_landmark_row(
+        dist_landmark_plainpalais_m=200.0,
+        dist_landmark_altstadt_m=100.0,
+    )
+    md = build_match_detail(listing=listing, hard=hard, signal_row=row)
+    axes = {f.axis for f in md.soft_facts if f.axis.startswith("landmark_")}
+    assert "landmark_plainpalais" not in axes
+    assert "landmark_altstadt" not in axes
+    # But the curated oldtown entry does appear — same kind allowlist hits.
+    assert "landmark_altstadt_zurich" in axes
+
+
+def test_nearby_landmarks_drop_beyond_max_radius() -> None:
+    """Entries beyond the 50 km cap don't clutter the nearby list."""
+    listing = _listing()
+    hard = HardFilters(soft_preferences=SoftPreferences())
+    # Only hb_bern is present and it's 120 km away → no nearby facts.
+    row = _make_row({"dist_landmark_hb_bern_m": 120_000.0})
+    md = build_match_detail(listing=listing, hard=hard, signal_row=row)
+    landmark_facts = [f for f in md.soft_facts if f.axis.startswith("landmark_")]
+    assert landmark_facts == []
+
+
+def test_nearby_landmarks_reach_rural_listings_within_cap() -> None:
+    """A rural listing with its nearest HB 40 km away still gets context."""
+    listing = _listing()
+    hard = HardFilters(soft_preferences=SoftPreferences())
+    # Locarno → Lugano shape: the nearest curated reference points are 30-40
+    # km away. All within the 50 km cap, so we emit them as "ok" context.
+    row = _make_row({
+        "dist_landmark_hb_lugano_m": 40_000.0,
+        "dist_landmark_lago_lugano_m": 38_000.0,
+        "dist_landmark_usi_lugano_m": 39_500.0,
+    })
+    md = build_match_detail(listing=listing, hard=hard, signal_row=row)
+    landmark_facts = [f for f in md.soft_facts if f.axis.startswith("landmark_")]
+    assert len(landmark_facts) == 3
+    for f in landmark_facts:
+        assert f.interpretation == "ok", (
+            f"{f.axis} @ {f.value!r} is beyond 1.5 km, should be ok (informational)"
+        )
+
+
+def test_nearby_landmarks_dedup_explicit_request() -> None:
+    """A landmark emitted via `near_landmark` is not re-emitted by the pass."""
+    listing = _listing()
+    hard = HardFilters(
+        soft_preferences=SoftPreferences(near_landmark=["ETH"]),
+    )
+    row = _make_landmark_row()
+    md = build_match_detail(listing=listing, hard=hard, signal_row=row)
+
+    eth_facts = [f for f in md.soft_facts if f.axis == "landmark_eth_zentrum"]
+    # Exactly one ETH fact (the explicit one), not duplicated by the pass.
+    assert len(eth_facts) == 1
+    # 3 more nearby facts in addition to the explicit ETH request.
+    nearby = [
+        f for f in md.soft_facts
+        if f.axis.startswith("landmark_") and f.axis != "landmark_eth_zentrum"
+    ]
+    assert len(nearby) == 3
+
+
+def test_nearby_landmarks_skipped_for_missing_signal_row() -> None:
+    """No signal row → no nearby landmark facts (nothing to measure)."""
+    listing = _listing()
+    hard = HardFilters(soft_preferences=SoftPreferences())
+    md = build_match_detail(listing=listing, hard=hard, signal_row=None)
+    landmark_facts = [f for f in md.soft_facts if f.axis.startswith("landmark_")]
+    assert landmark_facts == []
+
+
 def test_no_signal_row_still_produces_hard_checks_and_keywords() -> None:
     listing = _listing()
     hard = HardFilters(
