@@ -236,12 +236,15 @@ def test_post_listings_response_carries_demo_contract(
     for item in body["listings"]:
         bd = item["breakdown"]
         assert bd is not None
-        # Tier 3a extended this with 4 per-channel memory fields.
+        # Tier 3a added 4 per-channel memory fields. The image-upload path
+        # (commit d7d95e2) added ``dinov2_image_score`` — present for every
+        # result even on pure-text queries (where it's None).
         assert set(bd) == {
             "rrf_score",
             "bm25_score",
             "visual_score",
             "text_embed_score",
+            "dinov2_image_score",
             "soft_signals_activated",
             "memory_rankings_activated",
             "memory_score",
@@ -261,6 +264,8 @@ def test_post_listings_response_carries_demo_contract(
         assert bd["memory_visual"] is None
         assert bd["memory_feature"] is None
         assert bd["memory_price"] is None
+        # No image was uploaded — DINOv2 image-query channel is off by design.
+        assert bd["dinov2_image_score"] is None
 
     # Every returned listing must also carry match_detail, shaped for the UI.
     for item in body["listings"]:
