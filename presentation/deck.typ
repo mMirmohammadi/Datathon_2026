@@ -49,7 +49,7 @@
 // --- slide helpers -----------------------------------------------------------
 
 #let slide-n = counter("slide-n")
-#let slide-total = 15
+#let slide-total = 19
 
 #let header-strip = {
   set text(size: 10pt, fill: muted, tracking: 0pt)
@@ -431,20 +431,31 @@
   #panel(tone: card)[
     #hero-query(focus: ("siglip",), size: 15pt)
   ]
-  #v(16pt)
+  #v(12pt)
   #grid(
-    columns: (1.05fr, 1fr),
+    columns: (1fr, 1.05fr),
     column-gutter: 22pt,
+    align: top,
     [
       - One joint space for both.
       - Best photo scores each listing.
       - No text means skip this.
+
+      #v(10pt)
+      #stat([Photos indexed], [70k+], color: pink)
     ],
     [
-      #head("Scale")
-      #stat([Photos indexed], [70k+], color: pink)
-      #v(6pt)
-      #stat([Model size], [large shared space], color: pink)
+      #head("Matched on \"bright, airy\"")
+      #block(
+        clip: true,
+        radius: 8pt,
+        stroke: 0.5pt + border,
+        image("4.jpg", height: 6.8cm, fit: "cover"),
+      )
+      #v(4pt)
+      #text(size: 9.5pt, fill: muted, style: "italic")[
+        A real listing photo the text tower ranks up for this query.
+      ]
     ],
   )
 ]
@@ -717,13 +728,40 @@
 // =============================================================================
 
 #slide(kicker: "Summary", title: [What we built])[
+  // QR card pinned to the top-right corner of the slide body so the 2×
+  // image has room without pushing the slide onto a second page.
+  #place(
+    top + right,
+    dx: 0pt,
+    dy: -4pt,
+    block(
+      fill: card,
+      stroke: 0.5pt + border,
+      radius: 10pt,
+      inset: 8pt,
+      width: 10.8cm,
+      {
+        set text(tracking: 0pt)
+        set par(leading: 0.4em)
+        align(center, image("QR.svg", width: 10cm))
+        v(2pt)
+        align(center, text(
+          size: 10pt,
+          fill: orange,
+          weight: 700,
+          tracking: 1.2pt,
+        )[#upper("Scan to try it")])
+      },
+    ),
+  )
+
   - Hard rules first. All else second.
   - Cover words, sense, photos, habits.
   - Everything merges in one stage.
 
   #v(24pt)
   #grid(
-    columns: (auto, auto, auto, auto),
+    columns: (auto, auto),
     column-gutter: 10pt,
     row-gutter: 10pt,
     align: horizon,
@@ -735,7 +773,176 @@
 ]
 
 // =============================================================================
-// 15 · Thank you
+// 15 · Beyond the dataset · enrichment
+// =============================================================================
+
+#slide(kicker: "Beyond the data", title: [Richer data])[
+  #set text(size: 13pt, fill: ink-2)
+  The raw dataset had holes and missing signals. We closed them, on purpose.
+  #v(14pt)
+  #grid(
+    columns: (1.1fr, 1fr),
+    column-gutter: 22pt,
+    align: top,
+    [
+      #set par(leading: 0.65em)
+      - *Every listing knows its canton.* \
+        We geocoded the address; for the few rows without coordinates, we used the postal code to infer the canton.
+      - *Real commute minutes.* \
+        We precomputed door-to-door travel time by rail and bus for every listing using the official Swiss transit schedule.
+      - *Places people actually ask about.* \
+        45 Swiss train stations, universities and lakes — each hand-verified on a map before entering the system.
+      - *Features understood in four languages.* \
+        We parsed the description in DE, FR, IT and EN to flag balcony, elevator, parking, fireplace and 8 more.
+      - *Every photo made searchable.* \
+        70,548 listing photos encoded as vectors so queries can match by words or by look-alike photo.
+    ],
+    [
+      #grid(
+        columns: (1fr, 1fr),
+        column-gutter: 10pt,
+        row-gutter: 10pt,
+        stat([Canton coverage], [*99.68%* · 0 unknown], color: green),
+        stat([Commute rows], [*125,396* trips], color: blue),
+        stat([Named places], [*45* verified], color: amber),
+        stat([Photo vectors], [*70,548* encoded], color: pink),
+      )
+      #v(10pt)
+      #panel(tone: card)[
+        #set text(size: 10pt, fill: ink-2)
+        #set par(leading: 0.65em)
+        *Why it matters.* \
+        Every signal above is measured and sourced — so when the ranker says _"14 min to HB by transit"_ or _"balcony: present"_, it is reading a fact we computed, not a guess.
+      ]
+    ],
+  )
+]
+
+// =============================================================================
+// 16-18 · Live demo · full-bleed screenshots with overlay label
+// =============================================================================
+
+// Full-bleed demo slide: image fills the whole page (fit: contain preserves
+// aspect), a compact dark "bubble" carries the kicker + title + caption, and a
+// small counter sits in the opposite corner. `pos` picks which corner holds
+// the label; dx/dy fine-tune the offset away from the slide edge.
+#let demo-slide(
+  path,
+  kicker: none,
+  title: none,
+  caption: none,
+  pos: bottom + left,
+  dx: 1cm,
+  dy: -1cm,
+  counter-pos: bottom + right,
+  counter-dx: -0.6cm,
+  counter-dy: -0.5cm,
+) = {
+  slide-n.step()
+  page(
+    margin: 0pt,
+    fill: bg,
+    {
+      place(
+        center + horizon,
+        image(path, width: 100%, height: 100%, fit: "contain"),
+      )
+      place(
+        pos,
+        dx: dx,
+        dy: dy,
+        block(
+          fill: ink,
+          stroke: (left: 3pt + orange, rest: 0.5pt + ink-2),
+          radius: 10pt,
+          inset: (x: 16pt, y: 12pt),
+          width: 11.5cm,
+          {
+            set par(leading: 0.4em)
+            if kicker != none {
+              set text(size: 9pt, fill: orange, weight: 700, tracking: 2pt)
+              upper(kicker)
+              linebreak()
+              v(3pt)
+            }
+            if title != none {
+              text(
+                size: 20pt,
+                weight: 800,
+                fill: rgb("#FEF8F2"),
+                tracking: -0.3pt,
+              )[#title]
+              linebreak()
+              v(4pt)
+            }
+            if caption != none {
+              set text(size: 10pt, fill: rgb("#CBD5E1"))
+              caption
+            }
+          },
+        ),
+      )
+      place(
+        counter-pos,
+        dx: counter-dx,
+        dy: counter-dy,
+        context text(size: 9pt, fill: muted, tracking: 0pt)[
+          #slide-n.display() / #slide-total
+        ],
+      )
+    },
+  )
+}
+
+// Slide 16 — result card. Top-right keeps the photo, the listing details,
+// and the "How we ranked this home" breakdown bars fully visible; the label
+// sits over the top of the right-hand query-plan panel (already shown full
+// on slide 2, so no information is lost).
+#demo-slide(
+  "1.png",
+  kicker: "Live demo · 1",
+  title: [Top match],
+  caption: [
+    Same hero query + reference photo. \
+    The top home the system returns.
+  ],
+  pos: top + right,
+  dx: -1cm,
+  dy: 1cm,
+  counter-pos: bottom + right,
+)
+
+// Slide 17 — reason panel. Top-right places the label over the query-plan
+// panel (which we already showed on slide 2), keeping the fact rows + taste
+// bars fully visible.
+#demo-slide(
+  "2.png",
+  kicker: "Live demo · 2",
+  title: [Why it ranks here],
+  caption: [
+    Fact-by-fact checks, matched words, \
+    soft cues and your taste bars.
+  ],
+  pos: top + right,
+  dx: -1cm,
+  dy: 1cm,
+  counter-pos: bottom + right,
+)
+
+// Slide 18 — map. Bottom-left overlays the leaflet attribution strip only,
+// leaving every pin, highlighted canton and landmark visible.
+#demo-slide(
+  "3.png",
+  kicker: "Live demo · 3",
+  title: [Every option on the map],
+  caption: [
+    All ranked matches plus named places nearby — \
+    pan, filter, and refine live.
+  ],
+)
+
+// =============================================================================
+// 19 · Thank you
 // =============================================================================
 
 #cover-slide({
