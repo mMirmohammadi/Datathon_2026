@@ -136,4 +136,4 @@ Expected values are printed at the end of the upstream build in each script's `[
 
 ---
 
-**Provenance.** This bundle is the exact set of files the `/home/rohamzn/ETH_Uni/Datathon_2026` repo consumed at commit `HEAD` on 2026-04-19. Regenerate with the build plans in [`_context/LAYER1_STATE.md`](LAYER1_STATE.md), [`_context/LAYER2_STATE.md`](LAYER2_STATE.md), and [`_context/COMMUTE_MATRIX_REPORT_2026-04-19.md`](COMMUTE_MATRIX_REPORT_2026-04-19.md).
+**Provenance.** This bundle is the exact set of files the repo consumed at commit `HEAD` on 2026-04-19. Regenerate with the per-layer build recipes documented in [`enrichment/README.md`](../enrichment/README.md) (Layer 1), [`ranking/README.md`](../ranking/README.md) (Layer 2 + embeddings + commute matrix), and [`image_search/README.md`](../image_search/README.md) (SigLIP + DINOv2 indexes). End-to-end rebuild walk-through in [`docs/DEVELOPMENT.md`](DEVELOPMENT.md).

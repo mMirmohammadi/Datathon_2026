@@ -16,7 +16,7 @@ Every architectural decision below is cross-referenced to either the published b
 
 ## 1. Challenge brief
 
-From [challenge.md](challenge.md) and the organizer's kickoff message:
+From [docs/CHALLENGE.md](docs/CHALLENGE.md) and the organizer's kickoff message:
 
 User queries mix two intents:
 
@@ -25,7 +25,7 @@ User queries mix two intents:
 
 Evaluation explicitly penalizes hard-filter violations more than weak ranking:
 
-> *"A system that regularly violates hard constraints by more than a margin is not a strong solution, even if its soft ranking looks good."* — [challenge.md:218-220](challenge.md#L218-L220)
+> *"A system that regularly violates hard constraints by more than a margin is not a strong solution, even if its soft ranking looks good."* — [docs/CHALLENGE.md](docs/CHALLENGE.md)
 
 ## 2. Success criteria (from organizer)
 
@@ -352,7 +352,7 @@ The public HTTPS URL will be pinned in the top of [README.md](README.md) per org
 
 ---
 
-## 12. Pushbacks vs plan v1 ([mahbod/PLAN.md](mahbod/PLAN.md))
+## 12. Pushbacks vs plan v1
 
 Cross-validated via parallel agent research and 20+ cited sources:
 
