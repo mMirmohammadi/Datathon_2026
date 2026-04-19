@@ -2285,3 +2285,74 @@ code {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* ---------- Shared interaction buttons (Love / Save / Hide) ---------------
+   One visual language across all 4 surfaces: main cards, detail modal,
+   similar-modal tiles, favorites drawer. Variants change size only —
+   states (liked/saved/dismissed) style identically across surfaces so the
+   same listing always feels visually the same to the user. */
+
+.listing-actions.variant-compact {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.listing-actions.variant-compact .listing-action {
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.12s, transform 0.08s;
+}
+
+.listing-actions.variant-compact .listing-action:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.listing-actions.variant-compact .listing-action:active {
+  transform: scale(0.94);
+}
+
+.listing-actions.variant-compact .listing-action.liked {
+  background: rgba(233, 70, 140, 0.18);
+  border-color: rgba(233, 70, 140, 0.45);
+}
+
+.listing-actions.variant-compact .listing-action.saved {
+  background: rgba(255, 198, 63, 0.18);
+  border-color: rgba(255, 198, 63, 0.45);
+}
+
+.listing-actions.variant-compact .listing-action.dismissed {
+  background: rgba(140, 140, 140, 0.18);
+  border-color: rgba(140, 140, 140, 0.45);
+}
+
+/* When the compact actions sit inside a similar-card tile, nudge them
+   below the cosine chip and give them a little top breathing room. */
+.similar-card .body .listing-actions {
+  margin-top: 8px;
+}
+
+/* Favorites drawer: the drawer row is clickable, but its action buttons
+   must not trigger the row click. We cover that in JS; here we just give
+   the action row a little top margin so the three buttons don't touch the
+   feature chips above. */
+.fav-card .listing-actions {
+  margin-top: 6px;
+}
+
+/* Detail modal: actions sit between the meta row and the address block.
+   Reuse the same "card" variant so buttons look identical to the main
+   search cards. */
+.listing-detail-modal .listing-actions.variant-card {
+  margin: 10px 0 4px 0;
+}
