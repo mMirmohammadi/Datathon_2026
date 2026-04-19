@@ -89,6 +89,7 @@ def _rerank_hybrid(
 
     memory_rankings_count = 0
     memory_signals: MemorySignals | None = None
+    profile: UserProfile | None = None
     if personalize and user_id is not None and users_db_path is not None:
         profile = build_profile(
             user_id=user_id,
@@ -120,6 +121,27 @@ def _rerank_hybrid(
             candidate["memory_score"] = None
 
     candidates.sort(key=lambda c: -c["rrf_score"])
+
+    # Personalized path: hard-drop anything the user explicitly dismissed so
+    # it can't surface in the top-K. The dismissal-demotion channel in
+    # ``memory/rankings.py`` is just one of ~15 rankings in RRF, so a strongly
+    # positive listing that the user hated could still leak into the top;
+    # this filter ensures it can't. Dismissed listings remain reachable via
+    # the anonymous path or with ``personalize=False`` so the Undo button
+    # on the dimmed card still works.
+    if profile is not None and profile.dismissed_ids:
+        before = len(candidates)
+        candidates = [
+            c for c in candidates
+            if str(c["listing_id"]) not in profile.dismissed_ids
+        ]
+        dropped = before - len(candidates)
+        if dropped > 0:
+            print(
+                f"[INFO] _rerank_hybrid: dropped {dropped} dismissed listing(s) "
+                f"from personalized results for user_id={user_id}",
+                flush=True,
+            )
     return candidates
 
 

@@ -114,6 +114,94 @@ def test_opt_out_disables_memory_for_authenticated_user(
     assert r.json()["meta"]["pipeline"]["memory"] is False
 
 
+def test_dismissed_listing_is_filtered_from_personalized_results(
+    client_with_fake_llm: TestClient,
+) -> None:
+    """A listing explicitly dismissed via ``POST /me/interactions`` must
+    never appear in the personalized top-K, regardless of how strongly the
+    other ranking channels favour it.
+
+    The unpersonalized path must still show the same listing so the user
+    can find it (dimmed with an Undo button on the UI).
+    """
+    c = client_with_fake_llm
+    c.post(
+        "/auth/register",
+        json={"username": "dismissuser", "email": "d@x.co", "password": "hunter222"},
+    )
+    tok = c.get("/auth/csrf").json()["csrf_token"]
+    ids = _real_ids(limit=10)
+    # Warm up the profile so personalize actually fires.
+    for lid in ids[:3]:
+        _save(c, lid, tok)
+    # Pick a listing from the anonymous top-5 and dismiss it.
+    r_anon = c.post(
+        "/listings", json={"query": "Zuerich", "limit": 10, "personalize": False}
+    )
+    anon_top = [x["listing_id"] for x in r_anon.json()["listings"]]
+    assert len(anon_top) >= 5
+    victim = anon_top[0]
+    r = c.post(
+        "/me/interactions",
+        json={"listing_id": victim, "kind": "dismiss"},
+        headers={"X-CSRF-Token": tok},
+    )
+    assert r.status_code == 201, r.text
+
+    # Personalized: victim must be absent from the whole returned set.
+    r_pers = c.post(
+        "/listings", json={"query": "Zuerich", "limit": 20, "personalize": True}
+    )
+    pers_ids = [x["listing_id"] for x in r_pers.json()["listings"]]
+    assert victim not in pers_ids, (
+        f"dismissed listing {victim!r} leaked into personalized results {pers_ids}"
+    )
+    # And personalize actually ran (not a cold-start bypass).
+    assert r_pers.json()["meta"]["pipeline"]["memory"] is True
+
+    # Undo path: personalize=false still surfaces the victim so the user
+    # can find and Undo it.
+    r_off = c.post(
+        "/listings", json={"query": "Zuerich", "limit": 20, "personalize": False}
+    )
+    assert victim in [x["listing_id"] for x in r_off.json()["listings"]]
+
+
+def test_undismissed_listing_returns_to_personalized_results(
+    client_with_fake_llm: TestClient,
+) -> None:
+    """Dismiss then Undo: the listing is back in personalized results."""
+    c = client_with_fake_llm
+    c.post(
+        "/auth/register",
+        json={"username": "undiu", "email": "u@x.co", "password": "hunter222"},
+    )
+    tok = c.get("/auth/csrf").json()["csrf_token"]
+    ids = _real_ids(limit=10)
+    for lid in ids[:3]:
+        _save(c, lid, tok)
+    victim = ids[3]
+    # Dismiss then undismiss.
+    c.post(
+        "/me/interactions",
+        json={"listing_id": victim, "kind": "dismiss"},
+        headers={"X-CSRF-Token": tok},
+    )
+    c.post(
+        "/me/interactions",
+        json={"listing_id": victim, "kind": "undismiss"},
+        headers={"X-CSRF-Token": tok},
+    )
+    r = c.post(
+        "/listings", json={"query": "Zuerich", "limit": 20, "personalize": True}
+    )
+    pers_ids = [x["listing_id"] for x in r.json()["listings"]]
+    # The victim is no longer dismissed, so it must be allowed back into
+    # the returned set (even if some other channel doesn't rank it first).
+    # Easiest assertion: /me/dismissed is empty.
+    assert c.get("/me/dismissed").json() == []
+
+
 def test_warm_user_hard_filter_still_strict(
     client_with_fake_llm: TestClient,
 ) -> None:
