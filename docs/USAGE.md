@@ -31,7 +31,7 @@ See [`docs/INSTALLATION.md`](INSTALLATION.md) if startup fails.
 
 ## The demo UI
 
-```
+```text
 http://localhost:8000/demo
 ```
 
@@ -227,6 +227,10 @@ More in [`tests/fixtures/queries_de.md`](../tests/fixtures/queries_de.md).
 ---
 
 ## Authentication & personalization
+
+![My favorites modal with reset button](assets/favorites-memory.png)
+
+Every save / like / click is remembered for the authenticated user and re-ranks future queries. The **Start over (erase my history)** button wipes the preference memory on demand — personalization is explicit and reversible, never hidden.
 
 Personalization is **opt-in and per-session**:
 

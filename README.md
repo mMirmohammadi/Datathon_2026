@@ -4,6 +4,8 @@
 
 [📦 Install](docs/INSTALLATION.md) · [🚀 Usage](docs/USAGE.md) · [🏗 Architecture](ARCHITECTURE.md) · [🧪 Dev](docs/DEVELOPMENT.md) · [☁ Deploy](docs/DEPLOYMENT.md) · [🎯 Challenge](docs/CHALLENGE.md)
 
+![Robin — end-to-end demo](docs/assets/demo.gif)
+
 ---
 
 ## What it does
@@ -30,6 +32,28 @@ Design doc: [ARCHITECTURE.md](ARCHITECTURE.md). Built for the ETH/Uni Datathon 2
 - **Enrichment** — 166-column side table, 100% coverage with explicit `UNKNOWN` sentinels (no fabrication)
 - **Session-scoped personalization** — save / like / dismiss → memory-based re-ranking
 - **Explainable** — every ranked listing carries a human-readable reason
+
+---
+
+## See it in action
+
+### Explainable ranking — "why did this listing match?"
+
+![Explainable ranking panel](docs/assets/explainable-ranking.png)
+
+Every result shows **what we understood** (LLM-parsed hard constraints), **hard-filter pass/fail**, the **BM25 keywords found in the listing text**, the **real travel-minutes** to user-picked landmarks (ETH, UZH, Altstadt, Zürich HB) from the GTFS commute graph, and the **four fused channels** with their contribution to the final score.
+
+### Listing detail — landmark distances + score breakdown
+
+![Listing detail with per-signal contributions](docs/assets/listing-detail.png)
+
+A horizontal bar chart exposes each signal's contribution to the final score (Words · Photos · Meaning · Your wishes). Hard-filter pass/fail and visual / semantic match scores sit in the footer. Love / Save / Bring back feed the personalization memory.
+
+### Commute verification via Google Maps
+
+![Google Maps transit verification](docs/assets/maps-integration.gif)
+
+Every transit minute Robin shows is **auditable** — one click opens the Google Maps route from the listing address to the selected landmark. Users can cross-check our GTFS-derived r5py graph against Google's routing, so the commute signal isn't a black box.
 
 ---
 
