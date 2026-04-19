@@ -2148,6 +2148,52 @@ const dwellTracker = {
 
 // ---------- data flow --------------------------------------------------------
 
+// Homepage feed shown before the user searches. Pulls a small batch from
+// `/listings/default`, which is cheap (no LLM, no BM25/visual/text-embed)
+// and is personalised server-side when the caller is authenticated + past
+// cold-start. We render via `renderListings` and then override the status
+// banner it writes — the "Found N homes out of ? that passed your
+// must-haves" copy doesn't make sense when no must-haves were applied.
+async function loadDefaultFeed() {
+  // Don't clobber an existing result set (user could have searched very
+  // quickly before auth hydration finished).
+  if (els.listings.children.length > 0) return;
+
+  let data;
+  try {
+    const r = await fetch("/listings/default?limit=12", {
+      credentials: "same-origin",
+    });
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (e) {
+    console.warn("default feed load failed", e);
+    return;
+  }
+
+  const listings = data.listings || [];
+  if (!listings.length) return;
+
+  // Keep the query-plan meta panel hidden — there is no "what we
+  // understood" to show for a no-query default feed.
+  els.metaPanel.hidden = true;
+
+  renderListings(listings, data.meta || {});
+
+  const personalized = !!(data.meta && data.meta.personalized);
+  const authed = !!(authState && authState.user);
+  const n = listings.length;
+  const plural = n === 1 ? "" : "s";
+  const headline = personalized
+    ? `<b>Recommended for you</b> \u00b7 ${n} home${plural} picked from what you've liked, saved, or hidden.`
+    : authed
+    ? `<b>Start here</b> \u00b7 ${n} home${plural}. <span class="muted small">Like or save a few, then come back \u2014 we'll tune this to your taste.</span>`
+    : `<b>Start here</b> \u00b7 ${n} home${plural}. <span class="muted small">Sign in to get picks based on your taste.</span>`;
+  els.resultStatus.innerHTML = headline;
+
+  setStatus(personalized ? "Picks for you" : "Ready", "ok");
+}
+
 async function runQuery(query, limit) {
   setStatus("Thinking…", "loading");
   els.listings.innerHTML = "";
@@ -2326,9 +2372,9 @@ if (els.favoritesList) {
   });
 }
 
-hydrateAuthState().catch((e) => {
-  console.warn("auth hydrate failed", e);
-});
+hydrateAuthState()
+  .catch((e) => { console.warn("auth hydrate failed", e); })
+  .finally(() => { loadDefaultFeed().catch(() => {}); });
 
 // Compact the sticky search panel once the user has scrolled past the hero
 // label. A single rAF-throttled `scroll` listener toggles `.scrolled`; the

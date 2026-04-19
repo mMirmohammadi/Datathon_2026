@@ -408,6 +408,100 @@ def _attach_match_details(
         )
 
 
+def default_feed(
+    *,
+    db_path: Path,
+    users_db_path: Path | None,
+    limit: int,
+    user_id: int | None = None,
+) -> ListingsResponse:
+    """Homepage feed shown before the user types a query.
+
+    Returns natural-order listings, re-ranked by the authenticated user's
+    memory profile when available. Skips the LLM hard-fact call and the
+    BM25/visual/text-embed channels — there is no query to drive them.
+    Cold-start users and anonymous callers get the natural pool order.
+
+    Every fallback logs a ``[WARN]`` per CLAUDE.md §5 so a dark memory
+    pipeline (missing profile, stale state) is visible instead of silently
+    degrading to the unpersonalized path.
+    """
+    empty_hard = HardFilters()
+    pool_hard = HardFilters(limit=max(limit * 20, HYBRID_POOL))
+    candidates = filter_hard_facts(db_path, pool_hard)
+    pool_size = len(candidates)
+
+    personalized = False
+    mem_ranking_count = 0
+    if candidates and user_id is not None and users_db_path is not None:
+        profile: UserProfile | None = None
+        try:
+            profile = build_profile(
+                user_id=user_id,
+                users_db_path=users_db_path,
+                listings_db_path=db_path,
+            )
+        except Exception as exc:
+            print(
+                f"[WARN] default_feed.build_profile: expected=profile for "
+                f"user {user_id}, got={type(exc).__name__}: {exc}, "
+                f"fallback=natural order",
+                flush=True,
+            )
+
+        if profile is not None and not profile.is_cold_start:
+            try:
+                mem_rankings, _sig = build_memory_rankings(
+                    candidates=candidates,
+                    profile=profile,
+                    text_state=_TEXT_EMBED_STATE if text_embed_is_loaded() else None,
+                    visual_state=_VISUAL_STATE if visual_is_loaded() else None,
+                    scrape_to_image_source=SCRAPE_SOURCE_TO_IMAGE_SOURCE,
+                )
+            except Exception as exc:
+                print(
+                    f"[WARN] default_feed.memory_rankings: user {user_id}, "
+                    f"got={type(exc).__name__}: {exc}, fallback=natural order",
+                    flush=True,
+                )
+                mem_rankings = []
+
+            if mem_rankings:
+                natural = [str(c["listing_id"]) for c in candidates]
+                fused = fuse_rankings([natural] + mem_rankings)
+                for cand in candidates:
+                    cand["rrf_score"] = fused.get(str(cand["listing_id"]), 0.0)
+                    cand["memory_rankings_activated"] = len(mem_rankings)
+                candidates.sort(key=lambda c: -c.get("rrf_score", 0.0))
+                mem_ranking_count = len(mem_rankings)
+                personalized = True
+
+    top = candidates[:limit]
+    _attach_match_details(top, empty_hard, db_path)
+
+    return ListingsResponse(
+        listings=rank_listings(top, {"raw_query": ""}),
+        meta={
+            "query": None,
+            "query_plan": empty_hard.model_dump(),
+            "pipeline": {
+                "bm25": False,
+                "visual": False,
+                "text_embed": False,
+                "soft_rankings": 0,
+                "memory": personalized,
+                "memory_rankings": mem_ranking_count,
+                "rrf_k": 60,
+            },
+            "candidate_pool_size": pool_size,
+            "returned": len(top),
+            "default_feed": True,
+            "personalized": personalized,
+            "has_image_query": False,
+        },
+    )
+
+
 def query_from_filters(
     *,
     db_path: Path,

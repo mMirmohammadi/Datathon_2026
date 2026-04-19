@@ -17,7 +17,7 @@ from app.core.dinov2_search import (
 )
 from app.core.hard_filters import _parse_row
 from app.db import get_connection
-from app.harness.search_service import query_from_filters, query_from_text
+from app.harness.search_service import default_feed, query_from_filters, query_from_text
 from app.models.schemas import (
     HealthResponse,
     ImageSearchResponse,
@@ -36,6 +36,28 @@ router = APIRouter()
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@router.get("/listings/default", response_model=ListingsResponse)
+def listings_default(
+    limit: int = 12,
+    user: dict[str, Any] | None = Depends(get_current_user(required=False)),
+) -> ListingsResponse:
+    """Homepage feed shown before the user has typed a query.
+
+    Personalised by the memory channel when the caller is authenticated and
+    past cold-start; anonymous callers and cold-start users see the natural
+    pool order. Cheap — no LLM call, no BM25/visual/text-embed run.
+    """
+    settings = get_settings()
+    user_id = int(user["id"]) if user is not None else None
+    lim = max(1, min(int(limit), 50))
+    return default_feed(
+        db_path=settings.db_path,
+        users_db_path=settings.users_db_path,
+        limit=lim,
+        user_id=user_id,
+    )
 
 
 @router.post("/listings", response_model=ListingsResponse)
