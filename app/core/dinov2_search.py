@@ -478,13 +478,14 @@ def find_similar_listings_fused(
     *,
     db_path: Any,
     k: int = 10,
-) -> tuple[list[tuple[str, float]], dict[str, str]]:
+) -> tuple[list[tuple[str, float]], dict[str, str], dict[str, float]]:
     """Fused image + text + feature similarity for the "look-alikes" button.
 
     Works even when the query listing has zero images in the DINOv2 store
     (the old ``find_similar_listings`` returned empty in that case). Returns
     ``([(other_listing_id, fused_rrf_score), ...],
-      {other_listing_id: best_image_id_or_''})``.
+      {other_listing_id: best_image_id_or_''},
+      {other_listing_id: max_image_cosine})``.
 
     RRF over up to three rankings, all translated into the ``listing_id``
     namespace before fusion:
@@ -496,6 +497,12 @@ def find_similar_listings_fused(
     ``best_image_id`` is the image_id of the result listing whose embedding
     best matches the query listing's centroid, so the UI can surface that
     photo first on each card. Empty string when DINOv2 didn't contribute.
+
+    The third dict — the max DINOv2 cosine per result listing — is returned
+    separately from the fused score so UI can display an honest "match X%"
+    visual-similarity number. A fused RRF score (typical range 0.01–0.05) is
+    meaningless as a "% match". Listings not present in the image index are
+    absent from this dict; callers should treat that as "no visual score".
     """
     from app.core.visual_search import fuse_rankings
 
@@ -546,7 +553,7 @@ def find_similar_listings_fused(
         rankings.append(sorted(feature_scores, key=lambda lid: -feature_scores[lid]))
 
     if not rankings:
-        return [], {}
+        return [], {}, {}
 
     fused = fuse_rankings(rankings)
     fused.pop(str(listing_id), None)
@@ -571,7 +578,12 @@ def find_similar_listings_fused(
             best_local = int(np.argmax(local_scores))
             img_id = image_ids[rowids[best_local]] if rowids else None
             best_image_ids[rid] = img_id or ""
-    return ranked, best_image_ids
+    # Only expose cosines for listings we actually ranked (i.e. kept after the
+    # top-K cut). `image_scores` is keyed on listing_id with cosines in [-1, 1].
+    returned_cosines = {
+        rid: image_scores[rid] for rid, _ in ranked if rid in image_scores
+    }
+    return ranked, best_image_ids, returned_cosines
 
 
 def find_similar_by_image(

@@ -405,7 +405,7 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
             ),
         )
 
-    ranked, best_image_ids = find_similar_listings_fused(
+    ranked, best_image_ids, image_cosines = find_similar_listings_fused(
         listing_id=listing_id,
         platform_id=query_platform_id,
         db_path=settings.db_path,
@@ -440,16 +440,34 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
         for row in rows
     }
 
+    # Honour the SimilarListing.cosine schema contract (raw DINOv2 cosine in
+    # [-1, 1]). Previously we passed the fused RRF score, which is in the
+    # 0.01–0.05 range and renders as "3%" / "4%" in the UI regardless of how
+    # visually close the listings actually look. Ordering still comes from the
+    # fused score; only the displayed number changes.
+    n_with_cosine = 0
     results: list[SimilarListing] = []
-    for lid, fused_score in ranked:
+    for lid, _fused_score in ranked:
         ld = by_lid.get(str(lid))
         if ld is None:
             continue
+        visual_cosine = image_cosines.get(str(lid))
+        if visual_cosine is not None:
+            n_with_cosine += 1
         results.append(SimilarListing(
             listing_id=lid,
-            cosine=float(fused_score),
+            cosine=float(visual_cosine) if visual_cosine is not None else 0.0,
             listing=ld,
         ))
+
+    if results and n_with_cosine == 0:
+        print(
+            "[WARN] similar_listings.cosine_unavailable: "
+            f"expected=DINOv2 cosine per result for listing_id={listing_id}, "
+            f"got=0/{len(results)} results in the image index, "
+            "fallback=cosine=0.0 (UI hides the match% chip)",
+            flush=True,
+        )
 
     return SimilarListingsResponse(
         query_listing_id=listing_id,
@@ -460,8 +478,12 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
             "aggregation": "RRF(image, text, feature), k=60",
             "k_requested": k_clamped,
             "k_returned": len(results),
+            "cosine_coverage": n_with_cosine,
             "note": (
-                "'cosine' is the fused RRF score (not raw cosine) — higher is more similar."
+                "'cosine' is the max DINOv2 visual cosine (in [-1, 1]) between "
+                "the query listing and each result; ordering is the fused RRF "
+                "score over image + text + features. 0.0 means the result is "
+                "outside the image index."
             ),
         },
     )

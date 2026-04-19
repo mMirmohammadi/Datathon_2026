@@ -1599,11 +1599,19 @@ async function openListingDetail(listingId) {
   // instant; we fill in the real content when the fetch resolves.
   els.detailBody.innerHTML = '<p class="muted">Loading…</p>';
   els.detailTitle.textContent = "Listing";
-  if (typeof els.detailModal.showModal === "function") {
-    els.detailModal.showModal();
-  } else {
-    els.detailModal.setAttribute("open", "");
+  // `showModal()` throws InvalidStateError on an already-open <dialog>, which
+  // is exactly what happens if another flow (e.g. clicking a similar-card
+  // from the look-alike grid) re-enters here while the detail modal is still
+  // open. Re-render in place in that case. Also reset the body scroll so the
+  // user doesn't land mid-way through the previous listing's description.
+  if (!els.detailModal.open) {
+    if (typeof els.detailModal.showModal === "function") {
+      els.detailModal.showModal();
+    } else {
+      els.detailModal.setAttribute("open", "");
+    }
   }
+  if (els.detailBody) els.detailBody.scrollTop = 0;
 
   let data;
   try {
@@ -1694,12 +1702,19 @@ async function openSimilarModal(listingId, sourceTitle) {
   const cards = results.map((r) => {
     const L = r.listing || {};
     const img = L.hero_image_url || (L.image_urls || [])[0] || "";
+    // `cosine` is now the raw DINOv2 cosine in [-1, 1]. A positive value gets
+    // rendered as "match X%"; 0.0 (result outside the image index) is hidden
+    // so we never show a misleading "match 0%".
+    const cos = typeof r.cosine === "number" ? r.cosine : 0;
+    const cosineChip = cos > 0
+      ? `<div class="cosine">match ${(cos * 100).toFixed(0)}%</div>`
+      : "";
     return `<div class="similar-card" data-listing-id="${esc(r.listing_id)}">
       ${img ? `<img src="${esc(img)}" alt="${esc(L.title || "")}" loading="lazy" />` : ""}
       <div class="body">
         <div class="title">${esc(L.title || r.listing_id)}</div>
         <div class="meta">${esc(chf(L.price_chf))} · ${esc(L.rooms ?? "?")} rooms · ${esc(L.city || "")}</div>
-        <div class="cosine">match ${(r.cosine * 100).toFixed(0)}%</div>
+        ${cosineChip}
       </div>
     </div>`;
   }).join("");
@@ -1709,7 +1724,15 @@ async function openSimilarModal(listingId, sourceTitle) {
   els.similarBody.querySelectorAll(".similar-card").forEach((node) => {
     node.addEventListener("click", () => {
       const otherId = node.dataset.listingId;
-      if (otherId) openListingDetail(otherId);
+      if (!otherId) return;
+      // Close the look-alike modal before navigating into the result so the
+      // detail dialog sits at the top of the dialog stack (not buried behind
+      // the similar-results grid, which locks scroll + pointer events to
+      // the back layer). See openListingDetail for the matching guard that
+      // lets the detail modal be re-rendered in place without throwing
+      // InvalidStateError on `.showModal()`.
+      closeSimilarModal();
+      openListingDetail(otherId);
     });
   });
 }
