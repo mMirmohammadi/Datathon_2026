@@ -49,14 +49,14 @@
 // --- slide helpers -----------------------------------------------------------
 
 #let slide-n = counter("slide-n")
-#let slide-total = 13
+#let slide-total = 15
 
 #let header-strip = {
   set text(size: 10pt, fill: muted, tracking: 0pt)
   grid(
     columns: (1fr, auto),
     align: (left + horizon, right + horizon),
-    [#text(weight: 700, fill: ink)[robinreal] #h(4pt) · hackathon report],
+    [#text(weight: 700, fill: ink)[robinreal] #h(4pt) · hackathon report #h(4pt) · E27],
     [Datathon 2026],
   )
   v(-4pt)
@@ -151,6 +151,83 @@
   text(size: 11pt, fill: orange, weight: 700, tracking: 1.2pt)[#upper(body)],
 )
 
+// --- hero query + highlight helper -------------------------------------------
+// Each chunk: (text, list-of-category-names). The first category in the list
+// is the "primary" used in all-on mode. When `focus` is an array of category
+// names, any chunk that shares a category with `focus` lights up in the color
+// of the first matched category; the rest go muted. When `focus` is `none`,
+// every chunk renders in its primary color (the hero-query slide).
+
+#let cat-color = (
+  hard:         orange,
+  bm25:         purple,
+  arctic:       indigo,
+  siglip:       pink,
+  dinov2:       coral,
+  soft:         green,
+  landmarks:    blue,
+  multilingual: amber,
+  memory:       red,
+  rrf:          ink-2,
+)
+
+#let hero-chunks = (
+  ("Bright, airy",      ("siglip", "arctic")),
+  (" 3.5-room ",        ("hard",)),
+  ("Altbau",            ("bm25", "arctic")),
+  (" in ",              ()),
+  ("Zurich",            ("hard",)),
+  (" with ",            ()),
+  ("balcony",           ("hard",)),
+  (", ",                ()),
+  ("no garage",         ("hard",)),
+  (", ",                ()),
+  ("family-friendly",   ("soft",)),
+  (", ",                ()),
+  ("quiet",             ("soft",)),
+  (", ",                ()),
+  ("near ETH",          ("landmarks", "bm25")),
+  (", ",                ()),
+  ("max 25 min to HB",  ("landmarks", "bm25")),
+  (", ",                ()),
+  ("under 3200 CHF",    ("hard",)),
+  (".",                 ()),
+)
+
+#let hero-query(focus: none, size: 14pt) = {
+  set text(size: size)
+  for chunk in hero-chunks {
+    let t = chunk.at(0)
+    let cats = chunk.at(1)
+    if focus == none {
+      if cats.len() == 0 {
+        text(fill: muted, weight: 400)[#t]
+      } else {
+        let c = cat-color.at(cats.at(0))
+        text(fill: c.darken(15%), weight: 700)[#t]
+      }
+    } else {
+      let matched = cats.find(c => focus.contains(c))
+      if matched != none {
+        let c = cat-color.at(matched)
+        text(fill: c.darken(15%), weight: 700)[#t]
+      } else {
+        text(fill: muted-2, weight: 400)[#t]
+      }
+    }
+  }
+}
+
+// Reference interior — place `_OPE006.jpeg` next to this file (`presentation/`).
+#let ref-photo(height: 5.2cm) = block(
+  width: 100%,
+  height: height,
+  radius: 8pt,
+  clip: true,
+  stroke: 0.5pt + border,
+  image("_OPE006.jpeg", width: 100%, height: 100%, fit: "cover"),
+)
+
 // =============================================================================
 // 1 · Cover
 // =============================================================================
@@ -163,7 +240,7 @@
   v(18pt)
   set par(leading: 0.45em)
   set text(size: 56pt, weight: 800, fill: rgb("#FEF8F2"), tracking: -1.2pt)
-  [Robin: a hybrid search]
+  [E27: a hybrid search]
   linebreak()
   [and ranking system.]
   v(20pt)
@@ -179,35 +256,40 @@
 })
 
 // =============================================================================
-// 2 · Task + data reality
+// 2 · Hero query
 // =============================================================================
 
-#slide(kicker: "The brief", title: [Three required steps, one optional bonus.])[
+#slide(kicker: "The query", title: [Hero query map])[
+  #panel(tone: card)[
+    #hero-query(size: 19pt)
+  ]
+  #v(12pt)
   #grid(
-    columns: (1.1fr, 1fr),
-    column-gutter: 28pt,
+    columns: (1fr, 1.3fr),
+    column-gutter: 22pt,
     [
-      #head("What the brief asked for")
-      - *Step 1.* Extract hard filters from a natural-language query.
-      - *Step 2.* Retrieve candidates that satisfy every hard constraint.
-      - *Step 3.* Rank the retrieved set by soft preferences.
-      - *Bonus.* Personalize ranking from past interactions.
-
-      #v(16pt)
-      #panel(tone: card)[
-        #set text(size: 11pt, fill: ink-2, style: "italic")
-        _The evaluation weighs hard-filter precision first, then technical depth, feature width, creativity, demo quality, and failure analysis._
-      ]
+      #head("Add a photo")
+      #ref-photo()
     ],
     [
-      #head("Data reality we audited")
-      #stat([listings · sources], [22,819 · 4])
-      #v(6pt)
-      #stat([SRED share with no city, canton, or features], [48 %], color: red)
-      #v(6pt)
-      #stat([canton known before enrichment], [35 %], color: amber)
-      #v(6pt)
-      #stat([language mix], [DE 71 · FR 22 · IT 4 · EN 0.4], color: indigo)
+      #head("What each slide covers")
+      #set text(size: 10.5pt)
+      #grid(
+        columns: (auto, 1fr),
+        column-gutter: 10pt,
+        row-gutter: 5pt,
+        align: (right + horizon, left + horizon),
+        chip([1], color: orange),    [Must-haves you will not skip],
+        chip([2], color: purple),    [Words that appear in ads],
+        chip([3], color: indigo),    [Sense of the full description],
+        chip([4], color: pink),      [What listing photos actually show],
+        chip([5], color: coral),     [Similar look to your photo],
+        chip([6], color: green),     [Wishes, not strict requirements],
+        chip([7], color: blue),     [Trip time to named places],
+        chip([8], color: amber),    [Same query in four languages],
+        chip([9], color: red),      [Learns from saves and skips],
+        chip([10], color: ink-2),   [Fair blend of every signal],
+      )
     ],
   )
 ]
@@ -216,7 +298,7 @@
 // 3 · Pipeline
 // =============================================================================
 
-#slide(kicker: "Pipeline", title: [Query, gate, fused retrieval, reason.])[
+#slide(kicker: "Pipeline", title: [Query to ranking])[
   #let node(t, s, c: orange) = box(
     inset: (x: 10pt, y: 8pt),
     radius: 6pt,
@@ -231,314 +313,376 @@
   )
   #let arr = text(size: 14pt, fill: orange, weight: 700)[ → ]
 
-  #v(4pt)
+  #v(18pt)
   #align(center, grid(
     columns: (auto,) * 9,
     column-gutter: 4pt,
     align: horizon,
-    node("Query", "text ± image", c: ink),
+    node("Query", "words or photo", c: ink),
     arr,
-    node("LLM", "HardFilters, strict JSON", c: coral),
+    node("Model", "reads into rules", c: coral),
     arr,
-    node("SQL gate", "hard filters", c: red),
+    node("Database", "drops bad matches", c: red),
     arr,
-    node("Retrieve", "RRF (k=60) over N rankings", c: orange),
+    node("Retrieve", "merge many signals", c: orange),
     arr,
-    node("Rank", "templated reason string", c: amber),
+    node("Explain", "short reason per home", c: amber),
   ))
 
-  #v(22pt)
-  #head("Rankings that feed RRF, one design rule")
-  - *BM25.* SQLite FTS5 over `title + description + street + city`.
-  - *Dense text.* Snowflake Arctic-Embed-L v2, 1024 dim, L2 normalised.
-  - *Visual text-to-image.* SigLIP-2 Giant, max cosine per listing.
-  - *Soft rankings.* One best-first list per activated soft preference.
-  - *SQL as a gate.* RRF fuses only inside the allowed set.
+  #v(40pt)
+  #align(center, {
+    set par(leading: 0.6em)
+    set text(size: 14pt, fill: ink-2, style: "italic")
+    [Must-haves filter the list first.]
+    linebreak()
+    v(2pt)
+    [Then merge softer signals fairly.]
+  })
 ]
 
 // =============================================================================
-// 4 · Step 1 · Query understanding
+// 4 · Capability 1 · Hard SQL gate
 // =============================================================================
 
-#slide(kicker: "Step 1 · extract hard filters", title: [One LLM call, strict JSON schema, temperature 0.])[
+#slide(kicker: "1 · Must-haves", title: [Rules before ranking])[
+  #panel(tone: card)[
+    #hero-query(focus: ("hard",), size: 15pt)
+  ]
+  #v(16pt)
   #grid(
     columns: (1.05fr, 1fr),
     column-gutter: 22pt,
     [
-      - Structured outputs with `response_format = json_schema` and `strict = true`. One shot, no retries.
-      - Schema enumerates cantons, feature keys, and object categories, so the model cannot emit values outside the allowed set.
-      - System prompt encodes hard-vs-soft cue tables in DE / FR / IT / EN and bans inferring features from adjectives (_"modern"_ does NOT imply `new_build`).
-      - Sub-city neighbourhoods (_Oerlikon, Plainpalais_) emit both the neighbourhood and its parent city.
-      - On any failure the extractor logs `[WARN]` and re-raises. No silent defaults.
+      - Text turns into search rules.
+      - One normal spelling per city.
+      - Only qualifying homes pass through.
     ],
     [
-      #head("HardFilters (abridged)")
-      #panel(tone: card)[
-        #set text(size: 10pt, font: "Menlo")
-        ```
-        {
-          city:              ["zurich"],
-          canton:            null,
-          max_price:         2800,
-          min_rooms:         3.0,
-          max_rooms:         3.0,
-          features:          ["balcony"],
-          features_excluded: null,
-          bm25_keywords:     ["bright"],
-          soft_preferences: {
-            price_sentiment:  "cheap",
-            near_public_transport: true,
-            commute_target:   "zurich_hb",
-            near_landmark:    ["ETH"]
-          }
-        }
-        ```
-      ]
-    ],
-  )
-]
-
-// =============================================================================
-// 5 · Step 2 · Hard filter as a gate
-// =============================================================================
-
-#slide(kicker: "Step 2 · retrieve candidates", title: [Hard filters as a gate, feeding into scoring channels.])[
-  #grid(
-    columns: (1.1fr, 1fr),
-    column-gutter: 24pt,
-    [
-      - Retrieval universe = the first 300 rows passing the SQL hard filter (`HYBRID_POOL = 300`).
-      - BM25 order, dense text, visual, soft and (when present) memory rankings are all computed inside that pool.
-      - RRF (k=60) fuses every ranking the turn produces, so a hard violation is structurally unreachable.
-      - City match is ASCII-folded on both sides: the extractor emits a canonical slug (_Zuerich_ → `zurich`, _Genf_ → `geneva`), SQL keys on `city_slug`.
-      - Nothing is silent. Unknown scrape source, missing visual index, empty gate: each prints a `[WARN]` and the affected channel steps aside.
-    ],
-    [
-      #head("Hard filter fields")
+      #head("Example output")
       #panel(tone: card)[
         #set text(size: 10.5pt, fill: ink-2)
-        `city`, `postal_code`, `canton` \
-        `min_price`, `max_price` \
-        `min_rooms`, `max_rooms` \
-        `min_area`, `max_area` \
-        `min_floor`, `max_floor` \
-        `min_year_built`, `max_year_built` \
-        `available_from_after` \
-        `features` · `features_excluded` (12 flags) \
-        `object_category` \
-        `min_bathrooms`, `max_bathrooms` \
-        `bathroom_shared`, `has_cellar`, `kitchen_shared` \
-        `bm25_keywords`, `soft_preferences`
+        City Zurich · rooms 3.5 · max price 3200 \
+        Must have balcony · must not have garage
       ]
     ],
   )
 ]
 
 // =============================================================================
-// 6 · Step 3 · Fusion and blend
+// 5 · Capability 2 · BM25 lexical
 // =============================================================================
 
-#slide(kicker: "Step 3 · rank by relevance", title: [One fusion step: reciprocal-rank over every signal we produced.])[
+#slide(kicker: "2 · Exact words", title: [Words in listings])[
+  #panel(tone: card)[
+    #hero-query(focus: ("bm25",), size: 15pt)
+  ]
+  #v(16pt)
+  #grid(
+    columns: (1.05fr, 1fr),
+    column-gutter: 22pt,
+    [
+      - Find your words in listings.
+      - Fold accents for easier matching.
+      - Only your own words count.
+    ],
+    [
+      #head("Example")
+      #panel(tone: card)[
+        #set text(size: 11pt, fill: ink-2)
+        Keywords: old building, university, main station
+      ]
+      #v(8pt)
+      #stat([Indexed text rows], [25,546], color: purple)
+    ],
+  )
+]
+
+// =============================================================================
+// 6 · Capability 3 · Arctic dense semantic
+// =============================================================================
+
+#slide(kicker: "3 · Meaning", title: [Beyond exact words])[
+  #panel(tone: card)[
+    #hero-query(focus: ("arctic",), size: 15pt)
+  ]
+  #v(16pt)
+  #grid(
+    columns: (1.05fr, 1fr),
+    column-gutter: 22pt,
+    [
+      - Each home one text vector.
+      - Your query becomes a vector too.
+      - Nearer text means higher rank.
+    ],
+    [
+      #head("Scale")
+      #stat([Listing vectors], [25k], color: indigo)
+      #v(6pt)
+      #stat([Vector size], [1024 numbers], color: indigo)
+    ],
+  )
+]
+
+// =============================================================================
+// 7 · Capability 4 · SigLIP text → image
+// =============================================================================
+
+#slide(kicker: "4 · Text to photos", title: [Words meet pictures])[
+  #panel(tone: card)[
+    #hero-query(focus: ("siglip",), size: 15pt)
+  ]
+  #v(16pt)
+  #grid(
+    columns: (1.05fr, 1fr),
+    column-gutter: 22pt,
+    [
+      - One joint space for both.
+      - Best photo scores each listing.
+      - No text means skip this.
+    ],
+    [
+      #head("Scale")
+      #stat([Photos indexed], [70k+], color: pink)
+      #v(6pt)
+      #stat([Model size], [large shared space], color: pink)
+    ],
+  )
+]
+
+// =============================================================================
+// 8 · Capability 5 · DINOv2 image → image
+// =============================================================================
+
+#slide(kicker: "5 · Photo search", title: [Find similar looks])[
+  #panel(tone: card)[
+    #grid(
+      columns: (1fr, auto),
+      column-gutter: 14pt,
+      align: horizon,
+      hero-query(focus: (), size: 14pt),
+      text(size: 14pt, weight: 700, fill: coral.darken(15%))[+ photo],
+    )
+  ]
+  #v(16pt)
+  #grid(
+    columns: (0.9fr, 1.1fr),
+    column-gutter: 22pt,
+    align: top,
+    [
+      #ref-photo(height: 6cm)
+    ],
+    [
+      - Match your photo to all.
+      - Show best photo first.
+      - Balance text and photo fairly.
+
+      #v(10pt)
+      #stat([Quality check], [self-match at top], color: coral)
+    ],
+  )
+]
+
+// =============================================================================
+// 9 · Capability 6 · Soft rankings
+// =============================================================================
+
+#slide(kicker: "6 · Nice-to-haves", title: [Soft preferences])[
+  #panel(tone: card)[
+    #hero-query(focus: ("soft",), size: 15pt)
+  ]
+  #v(16pt)
+  #grid(
+    columns: (1.05fr, 1fr),
+    column-gutter: 22pt,
+    [
+      - One ranked list per wish.
+      - Facts precomputed for every home.
+      - Missing data does not hurt.
+    ],
+    [
+      #head("Examples")
+      #panel(tone: card)[
+        #set text(size: 10.5pt, fill: ink-2)
+        Quiet → farther from busy roads \
+        Family → schools and play nearby \
+        Cheap → price vs local typical
+      ]
+    ],
+  )
+]
+
+// =============================================================================
+// 10 · Capability 7 · Commute + landmarks
+// =============================================================================
+
+#slide(kicker: "7 · Places & travel", title: [Time to places])[
+  #panel(tone: card)[
+    #hero-query(focus: ("landmarks",), size: 15pt)
+  ]
+  #v(16pt)
+  #grid(
+    columns: (1.05fr, 1fr),
+    column-gutter: 22pt,
+    [
+      - Real schedules when we can.
+      - Many named places nationwide.
+      - Else rough walk-time guess.
+    ],
+    [
+      #head("Data")
+      #stat([Trip rows], [125k+], color: blue)
+      #v(6pt)
+      #stat([Named places], [45], color: blue)
+    ],
+  )
+]
+
+// =============================================================================
+// 11 · Capability 8 · Multilingual
+// =============================================================================
+
+#slide(kicker: "8 · Languages", title: [Speak your language])[
+  #panel(tone: card)[
+    #hero-query(size: 13.5pt)
+  ]
+  #v(12pt)
+  #grid(
+    columns: (1fr,) * 3,
+    column-gutter: 14pt,
+    [
+      #head("Deutsch")
+      #panel(tone: card)[
+        #set text(size: 10.5pt, style: "italic", fill: ink-2)
+        "Helle, luftige 3.5-Zimmer-Altbau in Zürich mit Balkon, ohne Garage, familienfreundlich, ruhig, nahe ETH, max 25 Min zum HB, unter 3200 CHF."
+      ]
+    ],
+    [
+      #head("Français")
+      #panel(tone: card)[
+        #set text(size: 10.5pt, style: "italic", fill: ink-2)
+        "Appartement Altbau lumineux 3.5 pièces à Zurich avec balcon, sans garage, familial, calme, proche ETH, max 25 min de la HB, moins de 3200 CHF."
+      ]
+    ],
+    [
+      #head("Italiano")
+      #panel(tone: card)[
+        #set text(size: 10.5pt, style: "italic", fill: ink-2)
+        "Appartamento Altbau luminoso 3.5 locali a Zurigo con balcone, senza garage, adatto alle famiglie, tranquillo, vicino ETH, max 25 min dalla HB, meno di 3200 CHF."
+      ]
+    ],
+  )
+  #v(14pt)
+  #grid(
+    columns: (1fr, 1fr, 1fr),
+    column-gutter: 14pt,
+    align: top,
+    [
+      #head("Understanding")
+      #set text(size: 10.5pt)
+      One model, four languages.
+    ],
+    [
+      #head("Meaning & photos")
+      #set text(size: 10.5pt)
+      Same models everywhere.
+    ],
+    [
+      #head("Word search")
+      #set text(size: 10.5pt)
+      Strip accents; text still matches.
+    ],
+  )
+]
+
+// =============================================================================
+// 12 · Capability 9 · Personalization (bonus)
+// =============================================================================
+
+#slide(kicker: "9 · You", title: [Learns your taste])[
+  #panel(tone: card)[
+    #hero-query(focus: (), size: 13.5pt)
+  ]
+  #v(12pt)
   #grid(
     columns: (1fr, 1fr),
     column-gutter: 22pt,
     [
-      - *RRF is the ranker.* Each ranking contributes `1 / (k + rank)` per listing (`k = 60`), scores are summed, top-K is sorted once.
-      - No weighted linear blend and no cross-encoder re-ranker. Relative channel weight is implicit in how many rankings each channel contributes.
-      - Pagination applies after fusion; the candidate pool (300) is kept intact for the reason builder.
-      - Dismissed listings take a hard drop after fusion on the personalized path.
-      - The reason string on each card is a template over the same per-channel scores, not an LLM paraphrase.
-
-      #v(8pt)
+      #head("Person A")
       #panel(tone: card)[
-        #set text(size: 11pt, style: "italic", fill: ink-2)
-        _"Matched hard filters; text match; visual match (0.24); semantic match (0.61); 6 soft preferences."_
+        #set text(size: 10.5pt, fill: ink-2)
+        Saved modern city flats; hid suburban houses. \
+        #v(4pt)
+        #text(weight: 700, fill: red.darken(10%))[Top pick:] loft near center, 3100
       ]
     ],
     [
-      #head("Rankings fused on a typical turn")
+      #head("Person B")
+      #panel(tone: card)[
+        #set text(size: 10.5pt, fill: ink-2)
+        Liked family homes near parks; hid shared rooms. \
+        #v(4pt)
+        #text(weight: 700, fill: red.darken(10%))[Top pick:] flat by playground, 2980
+      ]
+    ],
+  )
+  #v(14pt)
+  #grid(
+    columns: (auto, 1fr, auto, 1fr),
+    column-gutter: 10pt,
+    row-gutter: 6pt,
+    align: left + horizon,
+    chip([text taste], color: red), text(size: 10pt)[likes vs past saves],
+    chip([photo taste], color: red),   text(size: 10pt)[style of photos you liked],
+    chip([features], color: red),      text(size: 10pt)[balcony, lift, etc.],
+    chip([price habit], color: red),   text(size: 10pt)[typical rent you pick],
+  )
+  #v(8pt)
+  #set text(size: 10pt, fill: muted, style: "italic")
+  Skipped homes stay hidden when you are signed in.
+]
+
+// =============================================================================
+// 13 · Capability 10 · RRF payoff
+// =============================================================================
+
+#slide(kicker: "10 · Merge", title: [One fair blend])[
+  #grid(
+    columns: (1fr, 1.15fr),
+    column-gutter: 24pt,
+    align: top,
+    [
+      #head("How merge works")
+      #panel(tone: card)[
+        #set text(size: 12pt, fill: ink-2)
+        Each signal votes with rank. \
+        Higher rank anywhere helps. \
+        Sum votes; sort; show page.
+      ]
+      #v(12pt)
+      #head("Signals in one query")
+      #set text(size: 10.5pt)
       #table(
         columns: (1fr, auto),
         stroke: none,
-        inset: (x: 6pt, y: 5pt),
+        inset: (x: 4pt, y: 5pt),
         align: (left, right),
         table.hline(stroke: 0.5pt + border),
-        text(size: 10pt, fill: muted, weight: 600, tracking: 0pt)[Source],
-        text(size: 10pt, fill: muted, weight: 600, tracking: 0pt)[Rankings],
+        text(fill: muted, weight: 600, tracking: 0pt)[Kind],
+        text(fill: muted, weight: 600, tracking: 0pt)[Count],
         table.hline(stroke: 0.5pt + border),
-        [BM25 (FTS5 input order)],              [1],
-        [SigLIP-2 text-to-image cosine],        [1],
-        [Arctic-Embed dense cosine],            [1],
-        [DINOv2 image-to-image (if photo sent)],[0 or 1],
-        [Soft preferences (one per activated)], [0 to ~9],
-        [Memory (personalized, opt-in)],        [0 to 5],
+        [Word match],        [1],
+        [Meaning],           [1],
+        [Text → photos],     [1],
+        [Photo → photos],    [1],
+        [Nice-to-haves],     [few],
+        [Your history],      [few],
         table.hline(stroke: 0.5pt + border),
-      )
-      #v(6pt)
-      #text(size: 10pt, fill: muted)[_Max observed on a rich turn: ~13 rankings._]
-    ],
-  )
-]
-
-// =============================================================================
-// 7 · Going beyond · offline enrichment
-// =============================================================================
-
-#slide(kicker: "Beyond the dataset", title: [What we built into the data.])[
-  #grid(
-    columns: (1.3fr, 1fr),
-    column-gutter: 22pt,
-    [
-      - *Canton closure.* `reverse_geocoder` plus a PLZ majority vote, with gpt-5.4-nano residuals cross-checked against Nominatim.
-      - *Transit matrix.* r5py over cleaned Swiss GTFS, four JVM workers at 10 GB each, Haversine 40 km pre-filter.
-      - *Landmarks.* 30 hand-curated plus 15 mined from descriptions, Nominatim-resolved, chain-store names pruned.
-      - *Text features.* DE / FR / IT / EN regex with a 3-token negation lookback (_kein, ohne, pas de, sans, senza_) over 12 feature flags, `floor`, `year_built`, agency fields.
-      - *Image index.* SigLIP-2 Giant over all images (70,548 main + 617 floorplans), plus a DINOv2 ViT-L/14-reg global-descriptor index (1024 dim, GeM pooled) for image-to-image retrieval.
-    ],
-    // [
-      // #head("Numbers")
-      // #stat([canton coverage], [87.2 % → 99.68 %], color: green)
-    //   #v(6pt)
-    //   #stat([commute matrix rows], [125,396], color: indigo)
-    //   #v(6pt)
-    //   #stat([LLM cost for canton top-up], [CHF 0.02], color: amber)
-    //   #v(6pt)
-    //   #stat([r5py wall time], [91 min], color: orange)
-    // ],
-  )
-]
-
-// =============================================================================
-// 8 · Multimodal
-// =============================================================================
-
-#slide(kicker: "Multimodal", title: [Two image channels, both joined via RRF.])[
-  #grid(
-    columns: (1fr, 1fr),
-    column-gutter: 24pt,
-    [
-      #head("Text-to-image · SigLIP-2 Giant")
-      - SigLIP text tower encodes the query once; cosine against each candidate's images, max per listing.
-      - The ranking joins RRF with BM25 and Arctic. Empty-text turns skip it (encoder output too neutral).
-      - Matrix memory-mapped fp32, shape 70,548 × 1536.
-    ],
-    [
-      #head("Image-to-image · DINOv2 ViT-L/14-reg")
-      - A pasted or uploaded photo is encoded with the same 1024-d GeM-pooled descriptor and RRF-fused with every other channel.
-      - The matching photo is reordered to position 0 on the card so the user sees _why_ it matched.
-
-      #v(10pt)
-      #head("Index assets")
-      #stat([main · floorplan images], [70,548 · 617])
-    ],
-  )
-]
-
-// =============================================================================
-// 9 · Personalization (bonus)
-// =============================================================================
-
-#slide(kicker: "Bonus · personalization", title: [Personalization with memory rankings appended to RRF.])[
-  #grid(
-    columns: (1.05fr, 1fr),
-    column-gutter: 22pt,
-    [
-      // - Security with argon2id hashes, HttpOnly and `SameSite=Strict` cookies, CSRF double-submit, login rate-limit, session rotation.
-      - Event kinds: `bookmark`, `like`, `click`, `dwell`, `dismiss`, and their inverses. 180-day sliding window.
-      - Cold-start gate: fewer than 3 positives skips the positive-taste channels. Dismissal still fires.
-      - Anonymous path is bit-for-bit identical to the pre-personalization pipeline (pinned by a regression test).
-      - Dismissed listings take a hard drop after fusion, not just a demotion.
-
-      #v(8pt)
-      #panel(tone: card)[
-        #set text(size: 11pt)
-        bookmark *+5* · like *+3* · dwell ≥ 5 s *+2* · click *+1* · dismiss *−2*
-      ]
-    ],
-    [
-      #head("Memory rankings fed into RRF")
-      #table(
-        columns: (auto, 1fr),
-        stroke: none,
-        inset: (x: 4pt, y: 5pt),
-        align: (left, left),
-        table.hline(stroke: 0.5pt + border),
-        text(size: 10pt, fill: muted, weight: 600, tracking: 0pt)[Channel],
-        text(size: 10pt, fill: muted, weight: 600, tracking: 0pt)[Score],
-        table.hline(stroke: 0.5pt + border),
-        [1 · semantic taste], [cos(candidate, positives)],
-        [2 · visual taste],   [cos(img, mean(img positives))],
-        [3 · feature taste],  [12-d dot product],
-        [4 · price fit],      [−|log p − μ| / max(σ, 0.05)],
-        [5 · dismissal],      [dismissed plus 0.85-sim neighbours down],
+        [*Rough total*],     [*~13 max*],
         table.hline(stroke: 0.5pt + border),
       )
     ],
-  )
-]
-
-// =============================================================================
-// 10 · Engineering
-// =============================================================================
-
-#slide(kicker: "Engineering", title: [Reliable, Fast, Strong, Explainable.])[
-  #grid(
-    columns: (1fr, 1fr, 1fr),
-    column-gutter: 16pt,
-    stat([tests passing], [295 · 2 skipped · 11 s], color: orange),
-    stat([no-ML latency on 25 k rows], [~20 ms], color: amber),
-    stat([full-pipeline p50 target], [under 2.5 s], color: green),
-  )
-
-  #v(14pt)
-  - One migration file is the single source of schema truth (idempotent ALTERs).
-  - ML loaders are env-gated: `LISTINGS_VISUAL_ENABLED`, `LISTINGS_TEXT_EMBED_ENABLED`.
-  - Every fallback logs `[WARN]` with expected, got, and fallback fields.
-  - Sessions rotate on login and password change. Sliding 30-day, absolute 90-day expiry.
-  - Login rate-limit: 10 per username and 20 per IP per 5 minutes. argon2id at time=3, memory=64 MiB.
-
-  #v(12pt)
-  #panel(tone: card)[
-    #set text(size: 10.5pt, fill: muted)
-    *Explicit non-goals.* No OAuth or SSO. No password reset. No live OJP at query time (r5py matrix instead). No cross-encoder LLM judge at query time. No A/B evaluation harness.
-  ]
-]
-
-// =============================================================================
-// 11 · Worked example
-// =============================================================================
-
-#slide(kicker: "Worked example", title: [One query, end to end.])[
-  #panel(tone: ink)[
-    #set text(fill: rgb("#FEF8F2"), size: 12pt, font: "Menlo")
-    _"günstige ruhige 3-Zimmer-Wohnung in Zürich, nahe Schulen, nahe ETH, 25 Min zum HB"_
-  ]
-
-  #v(10pt)
-  #grid(
-    columns: (1fr, 1.2fr),
-    column-gutter: 22pt,
     [
-      #head("Extracted HardFilters")
-      #panel(tone: card)[
-        #set text(size: 10pt, font: "Menlo")
-        ```
-        city:       ["zurich"]
-        min_rooms:  3.0
-        max_rooms:  3.0
-        soft_preferences: {
-          price_sentiment:       "cheap",
-          quiet:                 true,
-          near_public_transport: true,
-          near_schools:          true,
-          commute_target:        "zurich_hb",
-          near_landmark:         ["ETH"]
-        }
-        ```
-      ]
-    ],
-    [
-      #head("Top-3 results")
+      #head("Example top three")
       #let row(rank, id, price, reason) = block(
         width: 100%,
         inset: 10pt,
@@ -553,47 +697,45 @@
             [
               #text(size: 11pt, font: "Menlo")[id=#id]
               #v(-2pt)
-              #text(size: 10pt, fill: muted, style: "italic", tracking: 0pt)[#reason]
+              #text(size: 9.5pt, fill: muted, style: "italic", tracking: 0pt)[#reason]
             ],
             text(weight: 700, size: 12pt, tracking: 0pt)[CHF #price],
           )
         },
       )
-      #row("1", "10211",     "2,042", "Matched hard filters; 5 soft preferences.")
+      #row("1", "10211",     "2,980", "Must-haves ok; words; photos; meaning; soft cues.")
       #v(6pt)
-      #row("2", "69b40cfc…", "1,744", "Matched hard filters; text match; semantic match (0.54); 4 soft preferences.")
+      #row("2", "69b40cfc…", "3,100", "Must-haves ok; words; photos; soft cues.")
       #v(6pt)
-      #row("3", "695fbad9…", "2,199", "Matched hard filters; text match; visual match (0.21); 4 soft preferences.")
+      #row("3", "695fbad9…", "2,850", "Must-haves ok; photos; meaning; soft cues.")
     ],
   )
 ]
 
 // =============================================================================
-// 12 · Summary
+// 14 · Summary
 // =============================================================================
 
-#slide(kicker: "Summary", title: [What ships.])[
-  - *Retrieval.* BM25, Arctic dense, SigLIP text-to-image, DINOv2 image-to-image, and up to ~9 soft-preference rankings, all behind a SQL hard-filter gate.
-  - *Ranking.* N-way reciprocal-rank fusion, `k = 60`, pool size 300, templated reason on every listing.
-  - *Data.* 22,819 listings · canton 99.68 % · 125 k r5py transit times · 45 landmarks · 70,548 indexed images.
-  - *Personalization.* 5 memory rankings (opt-in), derived from a 180-day interaction window. Dismissed listings hard-dropped.
-  - *Engineering.* 295 tests · 0 silent fallbacks · Docker · public HTTPS · live demo.
+#slide(kicker: "Summary", title: [What we built])[
+  - Hard rules first. All else second.
+  - Cover words, sense, photos, habits.
+  - Everything merges in one stage.
 
-  #v(28pt)
+  #v(24pt)
   #grid(
     columns: (auto, auto, auto, auto),
     column-gutter: 10pt,
     row-gutter: 10pt,
     align: horizon,
-    chip(color: orange)[295 tests passing],
-    chip(color: indigo)[0 silent fallbacks],
-    chip(color: amber)[p50 ~20 ms no-ML],
-    chip(color: green)[public HTTPS · live demo],
+    chip(color: orange)[10 ideas],
+    chip(color: purple)[1 merge],
+    chip(color: indigo)[warns, never hides],
+    chip(color: green)[live demo online],
   )
 ]
 
 // =============================================================================
-// 13 · Thank you
+// 15 · Thank you
 // =============================================================================
 
 #cover-slide({
