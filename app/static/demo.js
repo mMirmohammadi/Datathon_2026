@@ -3927,6 +3927,63 @@ function _wireMapTabsAndBoot() {
   // Widget panel lives in #view-map but its DOM is parsed at page load, so
   // the listener binding can happen even while the map tab is hidden.
   _wireWidgetPanel();
+  _wireHelpDrawer();
+}
+
+// ---------- Quick-tour help drawer ----------------------------------------
+// Slim user guide shown on demand from the topbar "?" button. Uses a
+// native <dialog>, so ESC + focus-trap come free. "Try this →" chips
+// pre-fill the main search bar with a worked example and submit it.
+
+function _wireHelpDrawer() {
+  const openBtn = document.getElementById("help-btn");
+  const dialog = document.getElementById("help-drawer");
+  const closeBtn = document.getElementById("help-drawer-close");
+  if (!openBtn || !dialog) return;
+  openBtn.addEventListener("click", () => {
+    if (typeof dialog.showModal === "function") {
+      dialog.showModal();
+    } else {
+      // Very old browsers: fall back to a plain show + manual backdrop.
+      console.warn(
+        `[WARN] help_drawer: expected=<dialog>.showModal, ` +
+          `got=no-API, fallback=dialog.open=true (no backdrop)`,
+      );
+      dialog.open = true;
+    }
+  });
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => dialog.close());
+  }
+  // Backdrop click closes — detect by checking whether the click landed on
+  // the <dialog> element itself (not a child). The dialog fills the edge of
+  // the viewport; its drawer inner is narrower, so x-clicks outside the
+  // inner fall on the dialog.
+  dialog.addEventListener("click", (ev) => {
+    if (ev.target === dialog) dialog.close();
+  });
+  // "Try this →" chips drop a worked example into the search bar and fire
+  // the same submit path the user would.
+  dialog.querySelectorAll(".help-try[data-query]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const q = btn.getAttribute("data-query") || "";
+      if (!q) return;
+      if (els.query) {
+        els.query.value = q;
+        els.query.focus();
+      }
+      dialog.close();
+      // Let the dialog-close animation settle before dispatching submit;
+      // otherwise the transition can stutter on slower machines.
+      setTimeout(() => {
+        if (els.form && typeof els.form.requestSubmit === "function") {
+          els.form.requestSubmit();
+        } else if (els.form) {
+          els.form.submit();
+        }
+      }, 80);
+    });
+  });
 }
 
 if (document.readyState === "loading") {

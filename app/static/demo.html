@@ -32,6 +32,23 @@
         </div>
 
         <div class="topbar-right">
+          <!-- Quick tour: slim circular "?" button opening a help drawer.
+               Placed left-of-auth so it's discoverable but never crowds the
+               primary CTAs (Log in / Sign up). Accessible via keyboard and
+               escape-dismissable. -->
+          <button type="button" class="help-btn" id="help-btn"
+                  title="Quick tour — how to use this site"
+                  aria-label="Open the quick tour">
+            <svg viewBox="0 0 24 24" width="16" height="16"
+                 fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true">
+              <circle cx="12" cy="12" r="9"/>
+              <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 1-1 1.7V14"/>
+              <circle cx="12" cy="17" r="0.6" fill="currentColor"/>
+            </svg>
+            <span class="help-btn-label">Guide</span>
+          </button>
           <div class="auth-widget" id="auth-widget">
             <div class="auth-anon" id="auth-anon">
               <button type="button" class="auth-btn" data-auth-open="login">Log in</button>
@@ -177,6 +194,128 @@
       </div>
     </dialog>
 
+    <!-- Quick tour drawer. Five focused sections — search, views, refine,
+         landmarks, top matches. Each has a one-line gist + an optional
+         "Try this" chip that drops a worked example into the search bar.
+         Slides in from the right; closes on backdrop click, ESC, or the × button.
+         Written as a <dialog> so modal focus-trap + native ESC handling come free. -->
+    <dialog id="help-drawer" class="help-drawer" aria-labelledby="help-drawer-title">
+      <div class="help-drawer-inner">
+        <header class="help-drawer-head">
+          <div class="help-drawer-titlewrap">
+            <h2 id="help-drawer-title">Quick tour</h2>
+            <p class="help-drawer-sub">One-minute read · everything you need to know.</p>
+          </div>
+          <button type="button" class="help-drawer-close"
+                  id="help-drawer-close" aria-label="Close">×</button>
+        </header>
+
+        <div class="help-drawer-body">
+          <article class="help-section">
+            <div class="help-section-head">
+              <span class="help-section-ico" aria-hidden="true">🔎</span>
+              <h3>Search like you're talking</h3>
+            </div>
+            <p>
+              Type naturally in any of German, French, Italian, or English —
+              we extract the hard constraints (city, price, rooms, bathrooms,
+              cellar, …) and the soft preferences (quiet, near-ETH, commute)
+              automatically.
+            </p>
+            <button type="button" class="help-try"
+                    data-query="bright 3-room apartment in Zurich under 3200 CHF, near ETH, with a cellar">
+              Try this →
+            </button>
+          </article>
+
+          <article class="help-section">
+            <div class="help-section-head">
+              <span class="help-section-ico" aria-hidden="true">🔀</span>
+              <h3>Two views, one search</h3>
+            </div>
+            <p>
+              <b>📋 List</b> — the ranker's top matches with full detail, photos,
+              breakdowns, and "why this ranked here".
+              <b>🗺️ Map</b> — every apartment that passes your filters as a
+              marker on the Swiss map, with neighbourhood clusters and the
+              landmarks you might care about.
+            </p>
+            <p class="help-micro muted">
+              Click a map marker to jump to its card. Click a cluster to
+              filter the cards to just that area.
+            </p>
+          </article>
+
+          <article class="help-section">
+            <div class="help-section-head">
+              <span class="help-section-ico" aria-hidden="true">🎛️</span>
+              <h3>Refine without re-typing</h3>
+            </div>
+            <p>
+              The <b>Refine</b> panel on the map lives in two-way sync with
+              your text query. Drag the price or size sliders, toggle
+              "Shared bath" / "Shared kitchen" / "Cellar", or add a landmark
+              — the search re-runs ~300ms later with your new constraints
+              layered on top of the LLM's extraction.
+            </p>
+            <p class="help-micro muted">
+              The feature toggles have three states: click once to require,
+              twice to exclude, thrice to reset.
+            </p>
+          </article>
+
+          <article class="help-section">
+            <div class="help-section-head">
+              <span class="help-section-ico" aria-hidden="true">📍</span>
+              <h3>Landmarks as filters</h3>
+            </div>
+            <p>
+              45 hand-picked Swiss places are always on the map — main stations,
+              universities, lakes, employer HQs, old towns. Icons are tinted
+              by category.
+            </p>
+            <p class="help-micro">
+              <b>Hover</b> — see the landmark's name. <b>Left-click</b> — open
+              its detail popup. <b>Right-click</b> — add it as a "near"
+              filter (the pin glows blue) or remove it if already active.
+            </p>
+            <button type="button" class="help-try"
+                    data-query="Wohnung im Kreis 4 nahe HB Zürich, max 2800 CHF, ruhig">
+              Try this →
+            </button>
+          </article>
+
+          <article class="help-section">
+            <div class="help-section-head">
+              <span class="help-section-ico" aria-hidden="true">⭐</span>
+              <h3>Top matches vs. all matches</h3>
+            </div>
+            <p>
+              On the map, <b>bright amber pins with the halo</b> are the
+              ranker's top picks (they also fill the List view). Faded
+              yellow dots are every other apartment that still passes your
+              filters — they're there so you can spot good options the
+              ranker didn't surface. The <b>⭐ Only top</b> toggle (top-left
+              of the map) hides the faded pool in one click.
+            </p>
+          </article>
+
+          <article class="help-section help-section-muted">
+            <div class="help-section-head">
+              <span class="help-section-ico" aria-hidden="true">📸</span>
+              <h3>Bonus: search by photo</h3>
+            </div>
+            <p>
+              The 📎 button next to the search bar attaches a photo — the
+              site then fuses a DINOv2 visual-similarity ranking into the
+              results, so a picture of "the vibe I want" narrows the
+              listings alongside your text.
+            </p>
+          </article>
+        </div>
+      </div>
+    </dialog>
+
     <!-- HERO SEARCH ---------------------------------------------------------- -->
     <section class="search-panel">
       <form id="search-form">
@@ -287,16 +426,24 @@
         <nav class="view-tabs" role="tablist" aria-label="Result view">
           <button type="button" class="view-tab active" id="view-tab-list"
                   role="tab" aria-selected="true" aria-controls="view-list"
-                  data-view="list">
+                  data-view="list"
+                  title="Top ranked matches with photos, price breakdowns, and 'why this ranked here' detail">
             <span class="view-tab-ico" aria-hidden="true">📋</span>
-            <span class="view-tab-label">List</span>
+            <span class="view-tab-labels">
+              <span class="view-tab-label">List</span>
+              <span class="view-tab-sub">Ranked matches</span>
+            </span>
             <span class="view-tab-count" id="view-tab-list-count" hidden></span>
           </button>
           <button type="button" class="view-tab" id="view-tab-map"
                   role="tab" aria-selected="false" aria-controls="view-map"
-                  data-view="map">
+                  data-view="map"
+                  title="Every filter-matched apartment on a map of Switzerland, with neighbourhood clusters and 45 curated landmarks">
             <span class="view-tab-ico" aria-hidden="true">🗺️</span>
-            <span class="view-tab-label">Map</span>
+            <span class="view-tab-labels">
+              <span class="view-tab-label">Map</span>
+              <span class="view-tab-sub">Every match + landmarks</span>
+            </span>
             <span class="view-tab-count" id="view-tab-map-count" hidden></span>
           </button>
         </nav>
@@ -334,7 +481,7 @@
                     class="map-toptoggle"
                     id="map-toptoggle"
                     aria-pressed="false"
-                    title="Show only the top ranker matches"
+                    title="Hide the faded pool of filter-matched homes so only the ranker's top picks remain"
                     hidden>
               <svg viewBox="0 0 24 24" width="14" height="14"
                    fill="currentColor" aria-hidden="true">

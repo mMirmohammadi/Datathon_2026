@@ -1031,6 +1031,26 @@ code {
 
 .view-tab-ico { font-size: 14px; line-height: 1; }
 
+/* Two-line tab label: the headline ("List", "Map") on top, a one-line
+   descriptor ("Ranked matches", "Every match + landmarks") below in muted
+   text so new users grok the view difference without having to click both. */
+.view-tab-labels {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+  gap: 1px;
+}
+
+.view-tab-sub {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+.view-tab.active .view-tab-sub { color: #78350f; }
+
 .view-tab-count {
   display: inline-block;
   min-width: 18px;
@@ -1772,13 +1792,18 @@ code {
 }
 
 .landmark-pin svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   color: #1e40af;            /* default; overridden per category below */
+  /* Paths in the inline SVG strings have no stroke attribute — the rule
+     below is what actually makes them visible. Without it pins rendered
+     as empty white discs. Category-specific rules override `color`, so
+     using currentColor here cascades the tint everywhere. */
+  stroke: currentColor;
+  fill: none;
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  fill: none;
 }
 
 .landmark-pin:hover {
@@ -3326,4 +3351,225 @@ code {
    has its own padding rhythm, so add a little breathing room above. */
 .listing-detail-modal .nearby-landmarks {
   margin-top: 10px;
+}
+
+/* =========================================================================
+   HELP / QUICK TOUR
+   Topbar "?" button + slide-in drawer dialog. Designed to answer "what does
+   this site do?" in under a minute for a first-time user. Uses <dialog>
+   so focus-trap, ESC-close, and a:11y come free.
+   ========================================================================= */
+
+.help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+              box-shadow 0.15s ease, transform 0.1s ease;
+  margin-right: 8px;
+}
+
+.help-btn:hover,
+.help-btn:focus-visible {
+  background: #fff7ed;
+  color: #b45309;
+  border-color: #fcd6b4;
+  transform: translateY(-1px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 14px rgba(120, 53, 15, 0.1);
+  outline: none;
+}
+
+.help-btn svg { flex-shrink: 0; }
+.help-btn-label { letter-spacing: 0.01em; }
+
+/* On very narrow headers we hide the text but keep the icon so the button
+   stays reachable. */
+@media (max-width: 720px) {
+  .help-btn-label { display: none; }
+  .help-btn { padding: 6px 8px; }
+}
+
+/* Drawer. Uses <dialog> but overrides the default backdrop so we can fade
+   it in with a slight blur. Slides in from the right over ~0.28s. */
+.help-drawer {
+  margin: 0;
+  padding: 0;
+  width: min(420px, 92vw);
+  max-width: 420px;
+  height: 100vh;
+  max-height: 100vh;
+  top: 0;
+  right: 0;
+  left: auto;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.help-drawer::backdrop {
+  background: rgba(17, 24, 39, 0.42);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: help-backdrop-in 0.22s ease-out;
+}
+
+.help-drawer[open] .help-drawer-inner {
+  animation: help-drawer-in 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes help-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes help-drawer-in {
+  from { transform: translateX(20px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+.help-drawer-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #ffffff;
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.18);
+  border-left: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.help-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: linear-gradient(180deg, #fffbeb 0%, #ffffff 100%);
+}
+
+.help-drawer-titlewrap h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.help-drawer-sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.help-drawer-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  flex-shrink: 0;
+}
+
+.help-drawer-close:hover {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.help-drawer-body {
+  padding: 18px 24px 28px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.help-section {
+  padding: 14px 15px 15px;
+  border-radius: 14px;
+  background: #fafbfc;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.help-section:hover {
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 24px rgba(0, 0, 0, 0.05);
+  transform: translateY(-1px);
+}
+
+.help-section-muted {
+  background: #f9f5ee;
+  border-color: #fde68a;
+}
+
+.help-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.help-section-ico {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.help-section-head h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+
+.help-section p {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #374151;
+}
+
+.help-section p:last-of-type { margin-bottom: 0; }
+
+.help-section p b { color: var(--ink); }
+
+.help-micro {
+  margin-top: 6px !important;
+  font-size: 11.5px !important;
+  line-height: 1.5 !important;
+}
+
+.help-try {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #f59e0b;
+  background: #ffffff;
+  color: #b45309;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.help-try:hover {
+  background: #f59e0b;
+  color: #ffffff;
+  transform: translateY(-1px);
 }
