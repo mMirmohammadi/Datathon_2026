@@ -266,6 +266,37 @@ class ImageSearchResponse(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
+class MapPoint(BaseModel):
+    """One dot on the ``/demo`` map overlay. One row per filter-matched
+    listing that has a known lat/lng (listings with NULL coords are dropped
+    from the map layer but still appear in the ranked text results).
+    """
+
+    listing_id: str
+    lat: float
+    lng: float
+    city: str | None = None
+    canton: str | None = None
+
+
+class ListingsMapRequest(BaseModel):
+    """Combined input for ``POST /listings/map``.
+
+    Either ``query`` (NL path; LLM extracts HardFilters) OR ``hard_filters``
+    (structured path; skips the LLM round-trip). At least one must be set;
+    if both, ``hard_filters`` wins.
+    """
+
+    query: str | None = Field(default=None, min_length=1)
+    hard_filters: HardFilters | None = None
+
+
+class ListingsMapResponse(BaseModel):
+    points: list[MapPoint]
+    total: int
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
 class HealthResponse(BaseModel):
     status: str
 

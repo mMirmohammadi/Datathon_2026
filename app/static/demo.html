@@ -4,6 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Find your next home · Listings Search</title>
+    <!-- Leaflet + MarkerCluster for the search-result map overlay. Versions
+         pinned so a transient CDN bump can't regress the UI. SRI hashes are
+         the ones on unpkg at pin time. -->
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin="anonymous" />
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <link rel="stylesheet" href="/demo-assets/demo.css" />
   </head>
   <body>
@@ -268,6 +279,21 @@
     <main class="results-grid">
       <section class="listings-panel">
         <div id="result-status" class="muted"></div>
+
+        <!-- Map overlay. Starts at Switzerland bbox; after every search the
+             backend emits (lat,lng,listing_id) for every hard-filter match
+             (not just the 25 paginated cards) so the user sees the geographic
+             spread. Clicking a cluster filters the card grid below to just
+             that area; clicking a single marker scrolls to the matching card. -->
+        <section class="map-panel" id="map-panel" aria-label="Listing location map">
+          <div class="map-panel-head">
+            <span class="map-panel-title">📍 Where they are</span>
+            <span class="map-counter" id="map-counter">—</span>
+            <button type="button" class="map-area-pill" id="map-area-pill" hidden></button>
+          </div>
+          <div id="map" class="map"></div>
+        </section>
+
         <div id="listings"></div>
       </section>
 
@@ -312,6 +338,16 @@
       </aside>
     </main>
 
-    <script src="/demo-assets/demo.js"></script>
+    <!-- Leaflet runtime loaded before our demo.js so the L global is ready
+         when the map-init code runs on DOMContentLoaded. -->
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin="anonymous"
+      defer></script>
+    <script
+      src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"
+      defer></script>
+    <script src="/demo-assets/demo.js" defer></script>
   </body>
 </html>

@@ -349,7 +349,213 @@ function isUnscoredBatch(listings, meta) {
   );
 }
 
-// Pass-2b display helpers. All 4 fields are tri-state (true / false / null for
+// ---------- Map overlay (Leaflet + MarkerCluster) --------------------------
+// One module, three jobs:
+//   1. Initialize a Leaflet map at the Swiss bbox on first page load.
+//   2. On every search, fetch /listings/map in parallel with the main result
+//      query; plot every filter-matched (lat,lng) as a circle marker clustered
+//      by Leaflet.markercluster; fit the viewport to the result bbox.
+//   3. Cluster click -> hide result cards NOT in the cluster's child set; a
+//      "clear area" pill resets. Single-marker click -> scroll + pulse the
+//      matching card.
+// The backend guarantees one point per listing and excludes NULL lat/lng
+// rows, so we can trust every point to have a valid listing_id + coords.
+const MAP_STATE = {
+  map: null,
+  clusterLayer: null,
+  // listing_id -> marker, so marker-click can find the card and vice versa.
+  markersByListingId: new Map(),
+  // When non-null, the cluster filter is active; only card ids in this set
+  // are visible below the map. `null` means "no area filter".
+  activeAreaFilter: null,
+  // Serialize overlapping fetches: discard stale responses.
+  fetchToken: 0,
+};
+
+const SWISS_BOUNDS = [[45.82, 5.96], [47.81, 10.49]];
+
+function _initMapOnce() {
+  if (MAP_STATE.map) return;
+  const mapEl = document.getElementById("map");
+  if (!mapEl || typeof L === "undefined") {
+    // Leaflet CDN hasn't loaded yet; first search fetches will no-op the map
+    // layer, search results still render in the card list below.
+    console.warn(
+      "[WARN] map_init_skipped: expected=window.L + #map, " +
+        "got=" + (typeof L === "undefined" ? "no Leaflet" : "no #map") +
+        ", fallback=results render without map overlay",
+    );
+    return;
+  }
+  MAP_STATE.map = L.map(mapEl, {
+    preferCanvas: true,
+    zoomControl: true,
+    attributionControl: true,
+  });
+  L.tileLayer(
+    "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    {
+      maxZoom: 19,
+      subdomains: "abcd",
+      attribution:
+        '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · ' +
+        '© <a href="https://carto.com/attributions">CARTO</a>',
+    },
+  ).addTo(MAP_STATE.map);
+  MAP_STATE.map.fitBounds(SWISS_BOUNDS);
+
+  MAP_STATE.clusterLayer = L.markerClusterGroup({
+    showCoverageOnHover: false,
+    spiderfyOnMaxZoom: true,
+    disableClusteringAtZoom: 17,
+    maxClusterRadius: 45,
+    // Softer size ramp than the default so a 2× cluster doesn't drown out a
+    // 1× neighbour (user asked for subtle size variation, not extreme).
+    iconCreateFunction: (cluster) => {
+      const n = cluster.getChildCount();
+      let sizeClass = "sm";
+      if (n >= 50) sizeClass = "lg";
+      else if (n >= 10) sizeClass = "md";
+      return L.divIcon({
+        html: `<div><span>${n}</span></div>`,
+        className: `marker-cluster marker-cluster-${sizeClass}`,
+        iconSize: L.point(36, 36),
+      });
+    },
+  });
+  MAP_STATE.clusterLayer.on("clusterclick", _onClusterClick);
+  MAP_STATE.map.addLayer(MAP_STATE.clusterLayer);
+
+  // Wire the pill (rendered by demo.html; click handler attached here so the
+  // handler can reach MAP_STATE without polluting global scope).
+  const pill = document.getElementById("map-area-pill");
+  if (pill) pill.addEventListener("click", clearAreaFilter);
+}
+
+function renderMapPoints(points) {
+  _initMapOnce();
+  if (!MAP_STATE.map) return;
+  MAP_STATE.clusterLayer.clearLayers();
+  MAP_STATE.markersByListingId.clear();
+  MAP_STATE.activeAreaFilter = null;
+  _updateAreaPill(0);
+  _updateMapCounter(points.length);
+  if (!points.length) {
+    MAP_STATE.map.fitBounds(SWISS_BOUNDS);
+    return;
+  }
+  const markers = [];
+  for (const p of points) {
+    const m = L.circleMarker([p.lat, p.lng], {
+      radius: 5,
+      color: "#b45309",
+      weight: 1.5,
+      fillColor: "#fbbf24",
+      fillOpacity: 0.85,
+    });
+    m._listingId = String(p.listing_id);
+    m.on("click", () => _onMarkerClick(m._listingId));
+    markers.push(m);
+    MAP_STATE.markersByListingId.set(m._listingId, m);
+  }
+  MAP_STATE.clusterLayer.addLayers(markers);
+  const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng]));
+  MAP_STATE.map.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 });
+}
+
+function _onClusterClick(ev) {
+  const childMarkers = ev.layer.getAllChildMarkers();
+  const ids = childMarkers.map((m) => m._listingId).filter(Boolean);
+  if (!ids.length) return;
+  MAP_STATE.activeAreaFilter = new Set(ids);
+  _applyAreaFilterToCards();
+  _updateAreaPill(ids.length);
+  // Leaflet also zooms into the cluster on click — good default behaviour.
+}
+
+function _onMarkerClick(listingId) {
+  const card = document.querySelector(
+    `.listing-card[data-listing-id="${CSS.escape(listingId)}"]`,
+  );
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  // Restart the pulse animation if it's already running.
+  card.classList.remove("pulse");
+  // Force reflow so the animation restarts (queried style forces layout).
+  void card.offsetWidth;
+  card.classList.add("pulse");
+  setTimeout(() => card.classList.remove("pulse"), 1500);
+}
+
+function _applyAreaFilterToCards() {
+  const cards = document.querySelectorAll(".listing-card[data-listing-id]");
+  const visibleSet = MAP_STATE.activeAreaFilter;
+  cards.forEach((c) => {
+    const id = c.dataset.listingId;
+    c.hidden = !!(visibleSet && !visibleSet.has(id));
+  });
+}
+
+function clearAreaFilter() {
+  MAP_STATE.activeAreaFilter = null;
+  document
+    .querySelectorAll(".listing-card[data-listing-id]")
+    .forEach((c) => (c.hidden = false));
+  _updateAreaPill(0);
+}
+
+function _updateAreaPill(count) {
+  const pill = document.getElementById("map-area-pill");
+  if (!pill) return;
+  if (count > 0) {
+    pill.textContent = `${count} in this area · clear`;
+    pill.hidden = false;
+  } else {
+    pill.hidden = true;
+  }
+}
+
+function _updateMapCounter(n) {
+  const el = document.getElementById("map-counter");
+  if (!el) return;
+  if (n == null) el.textContent = "—";
+  else if (n === 0) el.textContent = "no matches on map";
+  else el.textContent = `${n.toLocaleString("de-CH")} on map`;
+}
+
+async function fetchAndRenderMap(mapRequestBody) {
+  const myToken = ++MAP_STATE.fetchToken;
+  _updateMapCounter(null);
+  try {
+    const r = await fetch("/listings/map", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(mapRequestBody),
+    });
+    if (!r.ok) {
+      // Non-blocking: if the map endpoint fails, leave the last-known map
+      // state up and emit a WARN — the card list below is still authoritative.
+      console.warn(
+        `[WARN] map_fetch_failed: expected=200 from /listings/map, ` +
+          `got=${r.status}, fallback=leave current map state`,
+      );
+      return;
+    }
+    const data = await r.json();
+    // Stale response: a newer search fired while this one was in flight.
+    if (myToken !== MAP_STATE.fetchToken) return;
+    renderMapPoints(data.points || []);
+  } catch (e) {
+    console.warn(
+      `[WARN] map_fetch_error: expected=/listings/map reachable, ` +
+        `got=${e.message}, fallback=leave current map state`,
+    );
+  }
+}
+
+// ---------- Pass-2b display helpers ---------------------------------------
+// All 4 fields are tri-state (true / false / null for
 // UNKNOWN). Renders one chip per field that has a known value; empty string
 // when UNKNOWN, so the chip row collapses cleanly for listings whose extractor
 // couldn't decide. Used by the listing card, detail drawer, and saved-listings.
@@ -2506,9 +2712,30 @@ async function runQuery(query, limit) {
     els.memIndicator.hidden = !(meta.pipeline && meta.pipeline.memory);
   }
   renderListings(data.listings, meta);
+
+  // Map overlay: ask the server for every filter-matched (lat,lng) and plot
+  // them as a cluster. Reuses `meta.query_plan` (the HardFilters the LLM
+  // already extracted) so we don't pay for a second LLM round-trip.
+  const plan = meta.query_plan;
+  if (plan && typeof plan === "object") {
+    fetchAndRenderMap({ hard_filters: plan });
+  } else if (query) {
+    // No plan emitted (image-only query) — fall back to the NL path so the
+    // map at least shows corpus-wide coverage rather than going blank.
+    fetchAndRenderMap({ query });
+  }
 }
 
 // ---------- wiring -----------------------------------------------------------
+
+// Initialize the map at Switzerland bbox as soon as the DOM + Leaflet are ready.
+// Runs before any search; the map sits idle showing the whole country until
+// the user submits a query.
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", _initMapOnce);
+} else {
+  _initMapOnce();
+}
 
 els.form.addEventListener("submit", (ev) => {
   ev.preventDefault();

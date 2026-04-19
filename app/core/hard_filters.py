@@ -87,7 +87,18 @@ def _build_fts_match(keywords: list[str] | None) -> str | None:
     return " OR ".join(f'"{keyword}"' for keyword in cleaned)
 
 
-def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, Any]]:
+def _build_where_and_params(
+    filters: HardFilterParams,
+) -> tuple[list[str], list[Any]]:
+    """Return the WHERE clauses + parameter list for ``filters``.
+
+    Shared by :func:`search_listings` (the ranker's candidate-pool query) and
+    :func:`search_listing_coords` (the map-overlay query). Keeps both in lock-
+    step — adding a new hard filter updates both endpoints with one edit.
+
+    Assumes the caller will emit ``FROM listings l LEFT JOIN listings_enriched
+    e`` — every reference is qualified with the ``l.`` or ``e.`` alias.
+    """
     where_clauses: list[str] = []
     params: list[Any] = []
 
@@ -204,6 +215,11 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
         where_clauses.append("e.kitchen_shared_filled = ?")
         params.append("true" if filters.kitchen_shared else "false")
 
+    return where_clauses, params
+
+
+def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, Any]]:
+    where_clauses, params = _build_where_and_params(filters)
     fts_match = _build_fts_match(filters.bm25_keywords)
 
     # Columns from `listings` are aliased through `l.`; the 4 pass-2b columns
@@ -424,3 +440,52 @@ def _sort_clause_qualified(sort_by: str | None) -> str:
     if sort_by == "rooms_desc":
         return "l.rooms DESC NULLS LAST, l.listing_id ASC"
     return "l.listing_id ASC"
+
+
+def search_listing_coords(
+    db_path: Path, filters: HardFilterParams
+) -> list[dict[str, Any]]:
+    """Return `{listing_id, latitude, longitude, city, canton}` for every
+    listing that matches the hard-filter set.
+
+    Feeds the map-overlay panel. Unlike :func:`search_listings` this query
+    has NO pagination and NO FTS join — the map wants to show every filter
+    match so the user sees where the listings are geographically, not just
+    the top-ranked few. Listings with NULL lat/lng are skipped in the Python
+    projection (can't place them on a map).
+
+    Tight tuple: the payload scales linearly with match count and we want
+    it cheap on the wire (25k matches is ~2 MB; typical is ~40 KB).
+    """
+    where_clauses, params = _build_where_and_params(filters)
+
+    query = """
+        SELECT l.listing_id, l.latitude, l.longitude, l.city, l.canton
+        FROM listings l
+        LEFT JOIN listings_enriched e ON e.listing_id = l.listing_id
+    """
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    # Deterministic order so the client can stable-sort pins if needed.
+    query += " ORDER BY l.listing_id ASC"
+
+    with get_connection(db_path) as connection:
+        rows = connection.execute(query, params).fetchall()
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        d = dict(row)
+        lat = d.get("latitude")
+        lng = d.get("longitude")
+        if lat is None or lng is None:
+            continue  # unmappable; the card still appears in list results.
+        out.append(
+            {
+                "listing_id": str(d["listing_id"]),
+                "lat": float(lat),
+                "lng": float(lng),
+                "city": d.get("city"),
+                "canton": d.get("canton"),
+            }
+        )
+    return out

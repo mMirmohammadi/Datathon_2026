@@ -15,20 +15,28 @@ from app.core.dinov2_search import (
     find_similar_listings_fused,
     is_loaded as dinov2_is_loaded,
 )
-from app.core.hard_filters import _parse_row
+from app.core.hard_filters import _parse_row, search_listing_coords
 from app.core.landmark_proximity import compute_for_one as compute_nearby_landmarks
 from app.db import get_connection
-from app.harness.search_service import default_feed, query_from_filters, query_from_text
+from app.harness.search_service import (
+    default_feed,
+    query_from_filters,
+    query_from_text,
+    to_hard_filter_params,
+)
 from app.models.schemas import (
     HealthResponse,
     ImageSearchResponse,
     ListingData,
+    ListingsMapRequest,
+    ListingsMapResponse,
     ListingsQueryRequest,
     ListingsResponse,
     ListingsSearchRequest,
     SimilarListing,
     SimilarListingsResponse,
 )
+from app.participant.hard_fact_extraction import extract_hard_facts
 from app.participant.ranking import _to_listing_data
 
 router = APIRouter()
@@ -125,6 +133,40 @@ def listings_search(request: ListingsSearchRequest) -> ListingsResponse:
     return query_from_filters(
         db_path=settings.db_path,
         hard_facts=request.hard_filters,
+    )
+
+
+@router.post("/listings/map", response_model=ListingsMapResponse)
+def listings_map(request: ListingsMapRequest) -> ListingsMapResponse:
+    """Return one (lat,lng) point per filter-matched listing for the map
+    overlay. Accepts either a natural-language ``query`` (LLM extracts the
+    HardFilters) or a structured ``hard_filters`` payload (the demo's
+    manual-filter path); if both are set, ``hard_filters`` wins so an
+    authenticated search UI can skip the LLM round-trip.
+
+    No pagination — the overlay wants the whole match set. Coords are the
+    only heavyweight cost (40 KB typical, 2 MB worst case at 25k rows).
+    Listings with NULL lat/lng are silently dropped from the map layer;
+    they still appear in the ranked text results.
+    """
+    if request.hard_filters is None and not request.query:
+        raise HTTPException(
+            status_code=400,
+            detail="either `query` or `hard_filters` must be provided",
+        )
+    settings = get_settings()
+    if request.hard_filters is not None:
+        params = to_hard_filter_params(request.hard_filters)
+    else:
+        # Match the text-query pipeline so the map's dot set equals the
+        # SQL pool the ranker draws its top-N candidates from.
+        hard_facts = extract_hard_facts(request.query or "")
+        params = to_hard_filter_params(hard_facts)
+    points = search_listing_coords(settings.db_path, params)
+    return ListingsMapResponse(
+        points=points,
+        total=len(points),
+        meta={"match_limit_applied": False},
     )
 
 
