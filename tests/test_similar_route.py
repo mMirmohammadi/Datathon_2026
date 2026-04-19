@@ -59,7 +59,7 @@ def test_similar_happy_path_with_mock_index(tmp_path, monkeypatch) -> None:
 
     from app.core import dinov2_search
 
-    # Mock the loader (no real matrix) and the similarity function.
+    # Mock the loader (no real matrix) so no 289 MB mmap on tmp DBs.
     monkeypatch.setattr(dinov2_search, "load_dinov2_index", lambda *a, **kw: None)
     monkeypatch.setattr(dinov2_search, "is_loaded", lambda: True)
 
@@ -74,22 +74,24 @@ def test_similar_happy_path_with_mock_index(tmp_path, monkeypatch) -> None:
                 "SELECT listing_id, platform_id FROM listings LIMIT 3"
             ).fetchall()
         query_listing_id = rows[0]["listing_id"]
-        # Mock find_similar_listings to return the OTHER two listings' platform_ids,
-        # with high cosines. The route's platform_id → listing_id round-trip
-        # should correctly map them back.
-        fake_return = [
-            (rows[1]["platform_id"], 0.91),
-            (rows[2]["platform_id"], 0.88),
-        ]
-        monkeypatch.setattr(
-            dinov2_search, "find_similar_listings",
-            lambda lid, k=10, exclude_self=True: fake_return,
-        )
 
-        # Also need to patch the symbol the route imported directly.
+        # Post-d7d95e2 the route fuses 3 channels via
+        # ``find_similar_listings_fused`` which returns ``listing_id``s
+        # directly (no platform_id round-trip) and a ``best_image_ids`` map.
+        # Mock both to produce a deterministic 2-listing result.
+        fake_ranked = [
+            (rows[1]["listing_id"], 0.91),
+            (rows[2]["listing_id"], 0.88),
+        ]
+        fake_best_images: dict[str, str] = {}
+
         from app.api.routes import listings as listings_route
-        monkeypatch.setattr(listings_route, "find_similar_listings",
-                            lambda lid, k=10, exclude_self=True: fake_return)
+        monkeypatch.setattr(
+            listings_route, "find_similar_listings_fused",
+            lambda *, listing_id, platform_id, db_path, k=10: (
+                fake_ranked, fake_best_images
+            ),
+        )
         monkeypatch.setattr(listings_route, "dinov2_is_loaded", lambda: True)
 
         r = client.get(f"/listings/{query_listing_id}/similar?k=5")
@@ -97,19 +99,19 @@ def test_similar_happy_path_with_mock_index(tmp_path, monkeypatch) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["query_listing_id"] == query_listing_id
-    # Two results, with the right listing_ids and cosines.
+    # Exactly two results from the mocked fused ranker.
     assert len(body["results"]) == 2
     returned_ids = [res["listing_id"] for res in body["results"]]
     assert rows[1]["listing_id"] in returned_ids
     assert rows[2]["listing_id"] in returned_ids
-    # Cosines preserved.
+    # Fused scores preserved.
     cosines = [res["cosine"] for res in body["results"]]
     assert 0.91 in cosines and 0.88 in cosines
     # Listing data enriched with title/price/city.
     for res in body["results"]:
         assert "title" in res["listing"]
         assert res["listing"]["id"] in {rows[1]["listing_id"], rows[2]["listing_id"]}
-    # Meta present.
+    # Meta present (model string was expanded for the fused endpoint).
     meta = body["meta"]
-    assert meta["model"] == "dinov2_vitl14_reg"
+    assert "dinov2" in meta["model"]
     assert meta["k_returned"] == 2

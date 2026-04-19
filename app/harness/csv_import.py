@@ -75,6 +75,26 @@ def create_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    # Pass 2b requires ``app.core.hard_filters.search_listings`` to
+    # ``LEFT JOIN listings_enriched``. The production path gets this table
+    # from the enrichment pipeline; the legacy 500-row CSV fallback used by
+    # pytest tmp DBs never ran that pipeline, so without this stub every
+    # test that touches the hard-filter path dies with "no such table:
+    # listings_enriched". Four columns mirror the ones the JOIN reads
+    # (bathroom_count / bathroom_shared / has_cellar / kitchen_shared) so
+    # LEFT-JOINed rows resolve cleanly to NULL in tests, which is the same
+    # behaviour prod sees for unenriched rows.
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS listings_enriched (
+            listing_id              TEXT PRIMARY KEY,
+            bathroom_count_filled   TEXT,
+            bathroom_shared_filled  TEXT,
+            has_cellar_filled       TEXT,
+            kitchen_shared_filled   TEXT
+        )
+        """
+    )
     connection.commit()
 
 
