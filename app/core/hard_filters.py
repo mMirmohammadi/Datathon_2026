@@ -132,7 +132,16 @@ def _build_where_and_params(
         params.extend(int(value) for value in postal_code)
 
     if filters.canton:
-        where_clauses.append("UPPER(l.canton) = ?")
+        # `listings.canton` is only 41.8% populated (inherited from the raw CSV).
+        # `listings_enriched.canton_filled` is 99.7% — backfilled by pass-1a
+        # reverse_geocoder + pass-1b Nominatim + pass-1d PLZ majority vote +
+        # pass-1e GPT-nano. Filtering on the enriched column unlocks the other
+        # 58% of rows that otherwise silently vanish on any canton search. Both
+        # the raw canton codes and the enriched _filled values are stored as
+        # 2-letter uppercase ISO codes, so a direct equality (no UPPER()) works.
+        # 'UNKNOWN' is the sentinel for the 0.3% unresolved — it never equals
+        # a user-supplied canton code, so it's naturally excluded.
+        where_clauses.append("e.canton_filled = ?")
         params.append(filters.canton.upper())
 
     if filters.min_price is not None:
@@ -182,7 +191,16 @@ def _build_where_and_params(
     object_category = _normalize_list(filters.object_category)
     if object_category:
         placeholders = ", ".join("?" for _ in object_category)
-        where_clauses.append(f"l.object_category IN ({placeholders})")
+        # NULL tolerance: 47% of rows have `object_category IS NULL` (unlabeled
+        # at ingest). Excluding them on every positive category filter wipes
+        # out half the corpus — including, e.g., a "Möbliertes 1.5-Zimmer
+        # Studio" in Bern Altstadt that's tagged NULL but matches semantically.
+        # NULL means "unknown", not "something else", so we let it through the
+        # hard filter; BM25 + text-embedding channels still downrank listings
+        # whose description doesn't match the query word.
+        where_clauses.append(
+            f"(l.object_category IN ({placeholders}) OR l.object_category IS NULL)"
+        )
         params.extend(object_category)
 
     features = _normalize_list(filters.features)
