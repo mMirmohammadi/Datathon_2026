@@ -210,6 +210,27 @@ function renderAddressBlock(L, { cls = "listing-address" } = {}) {
   return `<div class="${esc(cls)}">${addrPart}${mapsPart}</div>`;
 }
 
+// Decide whether a result batch should render with rank-score badges (#1 TOP
+// 0.123), or without (random / anon-default feed).
+//
+// True when any of:
+//   * backend flagged it as an unpersonalized default feed, OR
+//   * every listing's score is 0 / null (no channel fired)
+//
+// False as soon as one listing has a non-zero score — that means at least
+// one ranking channel (BM25 / visual / semantic / soft / memory) fired and
+// the ordering is meaningful.
+//
+// Extracted into a named helper so we can unit-test it independently of the
+// DOM-heavy renderListings pipeline.
+function isUnscoredBatch(listings, meta) {
+  if (meta && meta.default_feed && !meta.personalized) return true;
+  if (!Array.isArray(listings) || listings.length === 0) return true;
+  return listings.every(
+    (r) => !r || r.score == null || r.score === 0,
+  );
+}
+
 // Pass-2b display helpers. All 4 fields are tri-state (true / false / null for
 // UNKNOWN). Renders one chip per field that has a known value; empty string
 // when UNKNOWN, so the chip row collapses cleanly for listings whose extractor
@@ -893,6 +914,10 @@ function renderListings(listings, meta) {
     meta.pipeline || null,
   );
 
+  // Batch-level "is this an unranked random selection?" decision.
+  // See `isUnscoredBatch` for the rule and rationale.
+  const unscored = isUnscoredBatch(listings, meta);
+
   dwellTracker.reset();
 
   listings.forEach((res, idx) => {
@@ -900,7 +925,9 @@ function renderListings(listings, meta) {
     const images = [listing.hero_image_url, ...(listing.image_urls || [])]
       .filter(Boolean)
       .filter((v, i, a) => a.indexOf(v) === i);
-    const isTop = idx === 0;
+    // "TOP" + gold border only make sense when the ranking is real.
+    // Suppress both on an unscored (random / anon default) feed.
+    const isTop = !unscored && idx === 0;
     const listingId = String(res.listing_id);
     const isLiked = authState.likedIds.has(listingId);
     const isBookmarked = authState.bookmarkedIds.has(listingId);
@@ -935,52 +962,26 @@ function renderListings(listings, meta) {
         <div class="listing-body">
           <div class="listing-head">
             <h3 class="listing-title">${esc(listing.title || "(no title)")}</h3>
-            <div class="rank-score">
+            ${
+              unscored
+                ? ""
+                : `<div class="rank-score">
               <div class="rank ${isTop ? "top" : ""}">#${idx + 1}${
-                isTop ? '<span class="rank-badge-top">TOP</span>' : ""
-              }</div>
+                    isTop ? '<span class="rank-badge-top">TOP</span>' : ""
+                  }</div>
               <div class="score" title="Final RRF score">${res.score.toFixed(
                 3,
               )}</div>
-            </div>
+            </div>`
+            }
           </div>
           ${
             authState.user || memBoost
-              ? `<div class="listing-actions">
-            ${
-              authState.user
-                ? `<button type="button" class="listing-action like-btn${
-                    isLiked ? " liked" : ""
-                  }" aria-pressed="${isLiked}" data-action="like"
-                    title="${
-                      isLiked
-                        ? "Tap to un-love it (we'll stop looking for similar homes)"
-                        : "I love this one! (we'll show you more like it)"
-                    }">${isLiked ? "💖 Loved" : "♡ Love"}</button>
-            <button type="button" class="listing-action save-btn${
-              isBookmarked ? " saved" : ""
-            }" aria-pressed="${isBookmarked}" data-action="save"
-                    title="${
-                      isBookmarked
-                        ? "Take it off your favorites"
-                        : "Save it to your favorites (we'll show more like it)"
-                    }">${isBookmarked ? "⭐ Saved" : "☆ Save"}</button>
-            <button type="button" class="listing-action dismiss-btn${
-              isDismissed ? " dismissed" : ""
-            }" aria-pressed="${isDismissed}" data-action="dismiss"
-                    title="${
-                      isDismissed
-                        ? "Bring it back"
-                        : "Hide this home (we won't show it again)"
-                    }">${isDismissed ? "↩️ Bring back" : "🙈 Hide"}</button>`
-                : ""
-            }
-            ${
-              memBoost
-                ? `<div class="memory-badge" title="We picked this one because it fits your taste">✨ picked for you</div>`
-                : ""
-            }
-          </div>`
+              ? `${renderListingActions(listingId, { variant: "card" })}${
+                  memBoost
+                    ? `<div class="memory-badge" title="We picked this one because it fits your taste">✨ picked for you</div>`
+                    : ""
+                }`
               : ""
           }
           <div class="listing-meta">
@@ -1058,27 +1059,7 @@ function renderListings(listings, meta) {
     );
 
     // Like / save / dismiss buttons never expand the card.
-    const likeBtn = card.querySelector('[data-action="like"]');
-    const saveBtn = card.querySelector('[data-action="save"]');
-    const dismissBtn = card.querySelector('[data-action="dismiss"]');
-    if (likeBtn) {
-      likeBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        toggleLike(listingId, likeBtn);
-      });
-    }
-    if (saveBtn) {
-      saveBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        toggleBookmark(listingId, saveBtn);
-      });
-    }
-    if (dismissBtn) {
-      dismissBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        toggleDismiss(listingId, dismissBtn, card);
-      });
-    }
+    wireListingActions(card, { cardEl: card });
 
     // expand/collapse wiring — detail panel is lazily mounted on first open
     const toggle = () => {
@@ -1604,6 +1585,111 @@ function renderLikeButton(buttonEl, liked) {
   buttonEl.textContent = liked ? "💖 Loved" : "♡ Love";
 }
 
+// ---------- shared interaction-button helpers ------------------------------
+//
+// Every listing presented in the UI (main cards, detail modal, look-alike
+// tiles, favorites drawer) should expose the same three interaction controls
+// to a logged-in user: Love, Save, Hide. Anonymous users see nothing.
+// Rendering + wiring were previously inlined only in `renderListings`; this
+// helper pair consolidates both so every render surface stays in lock-step.
+//
+// Visual variants:
+//   card     full pill buttons with text + icon (used on the main result
+//            cards and in the detail modal header; action is the primary
+//            secondary action of the surface)
+//   compact  icon-only pills, 28 px tall (used on tiles + drawer rows where
+//            real estate is tight)
+//
+// Safety: `stopPropagation()` on every click prevents the button from
+// triggering the surface's own click handler (card expand, modal open).
+// Wiring is idempotent (marker via a WeakSet) so calling it twice on the
+// same DOM subtree never double-binds.
+
+const _wiredActionContainers = new WeakSet();
+
+function renderListingActions(listingId, { variant = "card" } = {}) {
+  if (!authState || !authState.user) return "";
+  const id = String(listingId);
+  const isLiked = authState.likedIds.has(id);
+  const isBookmarked = authState.bookmarkedIds.has(id);
+  const isDismissed = authState.dismissedIds.has(id);
+  const compact = variant === "compact";
+
+  const btn = (action, state, labelOn, labelOff, titleOn, titleOff, iconOn, iconOff) => {
+    const active = !!state;
+    const classActive =
+      action === "like" ? " liked"
+      : action === "save" ? " saved"
+      : action === "dismiss" ? " dismissed"
+      : "";
+    const body = compact
+      ? (active ? iconOn : iconOff)
+      : (active ? `${iconOn} ${labelOn}` : `${iconOff} ${labelOff}`);
+    return `<button type="button" class="listing-action ${action}-btn${active ? classActive : ""}"
+              aria-pressed="${active}" data-action="${action}"
+              title="${esc(active ? titleOn : titleOff)}">${body}</button>`;
+  };
+
+  const love = btn(
+    "like", isLiked,
+    "Loved", "Love",
+    "Tap to un-love it (we'll stop looking for similar homes)",
+    "I love this one! (we'll show you more like it)",
+    "💖", "♡",
+  );
+  const save = btn(
+    "save", isBookmarked,
+    "Saved", "Save",
+    "Take it off your favorites",
+    "Save it to your favorites (we'll show more like it)",
+    "⭐", "☆",
+  );
+  const hide = btn(
+    "dismiss", isDismissed,
+    "Bring back", "Hide",
+    "Bring it back",
+    "Hide this home (we won't show it again)",
+    "↩️", "🙈",
+  );
+
+  return `<div class="listing-actions variant-${variant}" data-listing-id="${esc(id)}">
+    ${love}${save}${hide}
+  </div>`;
+}
+
+function wireListingActions(root, { cardEl = null, onDismissed = null } = {}) {
+  if (!root) return;
+  root.querySelectorAll(".listing-actions").forEach((box) => {
+    if (_wiredActionContainers.has(box)) return;
+    _wiredActionContainers.add(box);
+    const listingId = box.dataset.listingId;
+    if (!listingId) return;
+    const card = cardEl ?? box.closest(".listing-card");
+    const likeBtn = box.querySelector('[data-action="like"]');
+    const saveBtn = box.querySelector('[data-action="save"]');
+    const dismissBtn = box.querySelector('[data-action="dismiss"]');
+    if (likeBtn) {
+      likeBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleLike(listingId, likeBtn);
+      });
+    }
+    if (saveBtn) {
+      saveBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleBookmark(listingId, saveBtn);
+      });
+    }
+    if (dismissBtn) {
+      dismissBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleDismiss(listingId, dismissBtn, card);
+        if (onDismissed) onDismissed(listingId);
+      });
+    }
+  });
+}
+
 function renderBookmarkButton(buttonEl, saved) {
   if (!buttonEl) return;
   buttonEl.classList.toggle("saved", !!saved);
@@ -1625,10 +1711,17 @@ async function openFavorites() {
       '<p class="empty-state"><span class="empty-ico">💭</span>No saved homes yet. Tap <b>⭐ Save</b> on any card to add it here.</p>';
   } else {
     host.innerHTML = favs.map(renderFavoriteRow).join("");
+    // Wire the inline Love / Save / Hide buttons on each row. Must fire
+    // BEFORE the delegated "click row → open detail" below, because the
+    // action buttons call stopPropagation() — relying on DOM ordering would
+    // be fragile. Wiring is idempotent (WeakSet marker).
+    wireListingActions(host);
     // Wire click → detail modal. Using event delegation on the list host
     // means we don't pay an addEventListener per card (matters if the
     // drawer ever holds hundreds of bookmarks).
     host.onclick = (ev) => {
+      // Let the action buttons' own stopPropagation take effect first.
+      if (ev.target.closest(".listing-actions")) return;
       const card = ev.target.closest(".fav-card");
       if (!card) return;
       const lid = card.dataset.listingId;
@@ -1682,6 +1775,7 @@ function renderFavoriteRow(f) {
                 .join("")}</div>`
             : ""
         }
+        ${renderListingActions(f.listing_id, { variant: "compact" })}
         <div class="fav-footer muted small">
           Saved ${esc(f.saved_at.slice(0, 10))} · <kbd>${esc(f.listing_id)}</kbd>
         </div>
@@ -1822,11 +1916,17 @@ async function openSimilarModal(listingId, sourceTitle) {
         <div class="title">${esc(L.title || r.listing_id)}</div>
         <div class="meta">${esc(chf(L.price_chf))} · ${esc(L.rooms ?? "?")} rooms · ${esc(L.city || "")}</div>
         ${cosineChip}
+        ${renderListingActions(r.listing_id, { variant: "compact" })}
       </div>
     </div>`;
   }).join("");
 
   els.similarBody.innerHTML = metaLine + `<div class="similar-list">${cards}</div>`;
+
+  // Wire the interaction buttons on each tile FIRST so their click handlers
+  // call stopPropagation() before the tile's own click (which would close the
+  // modal and open the detail view).
+  wireListingActions(els.similarBody);
 
   els.similarBody.querySelectorAll(".similar-card").forEach((node) => {
     node.addEventListener("click", () => {
@@ -2041,6 +2141,7 @@ function renderListingDetail(L) {
       }
     </div>
     <div class="detail-meta">${metaParts.join(" · ")}</div>
+    ${renderListingActions(L.id, { variant: "card" })}
     ${addressBlock}
     ${
       (L.features || []).length
@@ -2083,6 +2184,12 @@ function renderListingDetail(L) {
     els.detailBody.querySelector(".img-nav.next")
       .addEventListener("click", () => go(1));
   }
+
+  // Wire the Love / Save / Hide buttons in the modal. No cardEl — this
+  // surface has no sibling card to dim, so toggleDismiss just updates the
+  // button state + server interaction. Modal stays open either way; the
+  // user closes it explicitly with × or the backdrop.
+  wireListingActions(els.detailBody);
 }
 
 async function clearHistory() {
