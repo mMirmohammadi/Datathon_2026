@@ -77,6 +77,34 @@ FEATURE_COLUMN_MAP = {
 }
 
 
+# Object categories where a NULL/unknown label is a reasonable match for the
+# user's intent. 47% of the corpus has `object_category IS NULL` at ingest
+# (mostly unlabelled small-apartment scrapes), so strict equality on e.g.
+# "furnished_apartment" wipes out thousands of semantically-compatible rows
+# — that was the "Möbliertes 1.5-Zimmer Studio in Bern Altstadt" bug.
+# But for distinctive categories (villa, commercial, parking, house,
+# hobby_room, garage) NULL is NOT a safe assumption; a NULL row is much
+# more likely to be an apartment than a villa, so letting NULL through on
+# those queries pollutes the results.
+#
+# Membership test here is CaseSensitive and must match the slugs produced
+# by app.core.normalize.translate_object_category (English canonical enum).
+_APARTMENT_LIKE_CATEGORIES: frozenset[str] = frozenset({
+    "apartment",
+    "furnished_apartment",
+    "studio",
+    "attic_apartment",
+    "maisonette",
+    "loft",
+    "penthouse",
+    "terrace_apartment",
+    "holiday_apartment",
+    "duplex",
+    "room",
+    "shared_room",
+})
+
+
 def _normalize_list(values: list[str] | None) -> list[str] | None:
     if not values:
         return None
@@ -132,7 +160,16 @@ def _build_where_and_params(
         params.extend(int(value) for value in postal_code)
 
     if filters.canton:
-        where_clauses.append("UPPER(l.canton) = ?")
+        # `listings.canton` is only 41.8% populated (inherited from the raw CSV).
+        # `listings_enriched.canton_filled` is 99.7% — backfilled by pass-1a
+        # reverse_geocoder + pass-1b Nominatim + pass-1d PLZ majority vote +
+        # pass-1e GPT-nano. Filtering on the enriched column unlocks the other
+        # 58% of rows that otherwise silently vanish on any canton search. Both
+        # the raw canton codes and the enriched _filled values are stored as
+        # 2-letter uppercase ISO codes, so a direct equality (no UPPER()) works.
+        # 'UNKNOWN' is the sentinel for the 0.3% unresolved — it never equals
+        # a user-supplied canton code, so it's naturally excluded.
+        where_clauses.append("e.canton_filled = ?")
         params.append(filters.canton.upper())
 
     if filters.min_price is not None:
@@ -182,7 +219,28 @@ def _build_where_and_params(
     object_category = _normalize_list(filters.object_category)
     if object_category:
         placeholders = ", ".join("?" for _ in object_category)
-        where_clauses.append(f"l.object_category IN ({placeholders})")
+        # NULL tolerance, but only when the user is asking for an apartment-
+        # like category. 47% of listings have `object_category IS NULL` at
+        # ingest, and empirically those unlabelled rows are overwhelmingly
+        # small residential units — so strict equality on e.g.
+        # `furnished_apartment` wipes out 12k listings that are semantically
+        # compatible (the "Möbliertes 1.5-Zimmer Studio in Bern Altstadt"
+        # bug). But for distinctive categories (villa, commercial, parking,
+        # house, ...) NULL is NOT a safe bet — a NULL row is very unlikely
+        # to be a villa, so letting NULL through pollutes those searches
+        # (live test before this guard: "villa in Lugano" went from 1 to 46
+        # results, 45 of which were NULL-category and probably not villas).
+        #
+        # Rule: allow NULL only when ALL requested categories are
+        # apartment-like. Mixed lists (e.g. ["studio", "villa"]) default to
+        # strict — the user is asking for a specific thing that villa-NULL
+        # leakage would violate.
+        if all(cat in _APARTMENT_LIKE_CATEGORIES for cat in object_category):
+            where_clauses.append(
+                f"(l.object_category IN ({placeholders}) OR l.object_category IS NULL)"
+            )
+        else:
+            where_clauses.append(f"l.object_category IN ({placeholders})")
         params.extend(object_category)
 
     features = _normalize_list(filters.features)

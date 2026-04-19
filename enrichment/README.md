@@ -1,198 +1,201 @@
-# `enrichment/` — Null-fill pipeline for Datathon 2026
+# `enrichment/` — Layer 1: null-fill pipeline
 
-Self-contained three-pass enrichment task (plus pass 0 + a bad-row filter +
-pass 3 sentinel fill). Produces a `listings_enriched` side table in which
-every field is either a recovered real value or an explicit `UNKNOWN`
-sentinel — **no silent fallbacks, no fabrication**.
+Self-contained multi-pass pipeline that turns the raw ~97%-null feature columns in [`listings`](../data/listings.db) into a fully populated side table `listings_enriched` — in which **every field is either a recovered real value or an explicit `UNKNOWN` sentinel**. No silent fallbacks, no fabrication.
 
-## What this folder guarantees
+- **25,546** rows enriched (100%) · perfect 1:1 bijection with `listings`
+- **41** fields × 4 provenance cols = **166** columns in `listings_enriched`
+- **307** tests passing in 279 s
+- Four external services used — deterministic offline where possible, rate-limited HTTP where necessary, GPT only for the residual hard cases.
 
-1. **Zero NULLs** in every `{field}_filled` column of `listings_enriched` for
-   every listing in `listings`.
-2. **Zero `UNKNOWN-pending`** sources left after the full pipeline runs.
-3. Every `_filled` value carries a `_source`, `_confidence`, and `_raw` triple
-   so the ranker can weight or reject low-confidence fills at query time.
-4. Anything that couldn't be recovered is explicitly sentinel-filled — never
-   defaulted to a plausible-looking value.
+---
+
+## Guarantees
+
+1. **Zero NULLs** in any `{field}_filled` column of `listings_enriched` for every row in `listings`.
+2. **Zero `UNKNOWN-pending`** source values after the full pipeline runs.
+3. Every `_filled` value carries a `_source`, `_confidence`, `_raw` triple so the ranker can weight or reject low-confidence fills at query time.
+4. Anything that couldn't be recovered is **explicitly** sentinel-filled — never defaulted to a plausible-looking value.
+
+---
 
 ## Pipeline
 
-```
-listings  →  pass 0  (CREATE listings_enriched + backfill 'original' values from raw columns)
-          →  drop_bad_rows  (mark price<200, price>50k, rooms=0 as DROPPED_bad_data)
-          →  pass 1a  (reverse_geocoder offline → city + canton, 26-canton map)
-          →  pass 1b  (Nominatim → postal_code + street, 1 req/s, disk-cached)
-          →  pass 2   description extraction — two implementations:
-              · pass 2 GPT  (default) — OpenAI gpt-5.4-mini Structured Outputs
-              · pass 2 regex (legacy) — multilingual regex + YAML patterns
-          →  pass 3   (UNKNOWN-pending → UNKNOWN, registry-drift guard)
-          →  assert_no_nulls post-condition
-```
+```mermaid
+flowchart TB
+    LST[("listings<br/>25,546 rows · ~97% null features")]
 
-### Pass 2: GPT vs regex
+    subgraph P0["Pass 0 — bootstrap"]
+        P0A["pass0_create_table.py<br/>CREATE listings_enriched<br/>backfill 'original' from raw"]
+        P0B["drop_bad_rows.py<br/>mark price<200, price>50k,<br/>rooms=0 as DROPPED_bad_data"]
+    end
 
-The GPT implementation is preferred for accuracy — it handles DE/FR/IT/EN
-natively, reads context rather than tokens, and catches paraphrases the regex
-catalogue misses. The legacy regex pass is kept around for zero-cost local
-runs and as a reference for the output contract.
+    subgraph P1["Pass 1 — geo"]
+        P1A["pass1_geocode.py<br/>reverse_geocoder (offline KD-tree)<br/>lat/lng → city + canton"]
+        P1B["pass1b_nominatim.py<br/>Nominatim 1 req/s<br/>→ postal_code + street"]
+        P1BX["pass1b_backfill_canton.py<br/>canton from cached Nominatim"]
+        P1D["pass1d_canton_topup.py<br/>PLZ-majority-vote fallback"]
+        P1E["pass1e_canton_gpt_nano.py<br/>gpt-5.4-nano residual ~64 rows"]
+        P1EV["pass1e_verify.py<br/>audit GPT vs Nominatim"]
+    end
 
-| Aspect                | pass 2 GPT (default)                                         | pass 2 regex (legacy)                         |
-| --------------------- | ------------------------------------------------------------ | --------------------------------------------- |
-| Model / engine        | `gpt-5.4-mini-2026-03-17`                                    | YAML patterns in `enrichment/patterns/*.yaml` |
-| Cost for 25k listings | ~$50 one-shot (aggressive prompt cache halves this)          | $0                                            |
-| Wall-clock            | ~90 min (16 concurrent async)                                | ~30 s                                         |
-| Languages             | DE/FR/IT/EN + anything else GPT understands                  | DE/FR/IT/EN only                              |
-| Cache                 | append-only JSONL at `enrichment/data/cache/gpt_pass2.jsonl` | none                                          |
-| Source tag            | `text_gpt_5_4`                                               | `text_regex_{de,fr,it,en}`                    |
+    subgraph P2["Pass 2 — description extraction"]
+        P2R["pass2_text_extract.py<br/>DE/FR/IT/EN regex + YAML patterns"]
+        P2G["pass2_gpt_extract.py (default)<br/>gpt-5.4-mini Structured Outputs<br/>~$50 for 25k listings"]
+        P2B["pass2b_bathroom_cellar_kitchen.py<br/>gpt-5.4-nano<br/>bathroom/cellar/shared-amenity"]
+    end
 
-Toggle with `--pass2-impl=gpt` (default) or `--pass2-impl=regex`. Both share
-the same `listings_enriched` write contract — you can mix and match by
-re-running on already-enriched rows; the non-overwrite invariant protects
-already-filled values.
+    subgraph P4["Pass 4 — landmarks (cache-only)"]
+        P4["pass4_landmark_mining.py<br/>gpt-5.4-nano mines mentions<br/>→ cache (feeds ranking/)"]
+    end
 
-### Concurrency: SQLite locking
+    subgraph P3["Pass 3 — sentinel"]
+        P3A["pass3_sentinel_fill.py<br/>UNKNOWN-pending → UNKNOWN"]
+        P3B["assert_no_nulls<br/>post-condition check"]
+    end
 
-Pass 1b (1 req/s) and pass 2 (16 concurrent) can run simultaneously because:
+    LST --> P0A --> P0B
+    P0B --> P1A --> P1B --> P1BX --> P1D --> P1E --> P1EV
+    P1EV --> P2R & P2G --> P2B
+    P2B --> P4 --> P3A --> P3B
+    P3B --> ENR[("listings_enriched<br/>25,546 rows · 166 cols<br/>ZERO nulls")]
 
-1. `common/db.py:connect()` enables `journal_mode=WAL` + `busy_timeout=30s` +
-   `synchronous=NORMAL`. Readers never block writers in WAL.
-2. Every writing pass commits frequently — pass 1b commits once per
-   coordinate, pass 2 commits every 25 rows from its cache-apply loop plus
-   every 200 from the live GPT loop. This keeps the exclusive write-lock
-   holding time well under the 30 s busy_timeout.
-
-If you see `database is locked` errors, check (a) that the DB really is in
-WAL mode (`sqlite3 data/listings.db 'PRAGMA journal_mode;'` should print
-`wal`), and (b) that no long-running pass (including an interrupted one) is
-holding a stale transaction.
-
-## Layout
-
-```
-enrichment/
-  schema.py                  ← FIELDS registry + CREATE TABLE generator
-  common/
-    db.py                    ← sqlite3 connect helper
-    sources.py               ← Source enum + VALID_SOURCES / FINAL_SOURCES sets
-    provenance.py            ← write_field() + coerce_to_filled() with validation
-    confidence.py            ← compute_confidence(base, lang_match, negated)
-    text_extract.py          ← find_first_match() + is_negated() (3-token lookback)
-    langdet.py               ← strip_html + guess_lang (self-contained, no matplotlib)
-    cantons.py               ← reverse_geocoder admin1 → 2-letter ISO canton code
-  patterns/                  ← YAML regex registry per field, per language
-    features.yaml            ← 12 features × {de, fr, it, en}
-    year_built.yaml
-    floor.yaml               ← ground / basement / numeric sub-patterns
-    area.yaml                ← m² with 10–500 validation
-    available_from.yaml      ← immediate / ISO / European date sub-patterns
-    agency_phone.yaml        ← Swiss +41 format
-    agency_email.yaml        ← RFC-5322-lite + TLD allowlist
-    agency_name.yaml         ← derived from agency_email
-    negation.yaml            ← per-language negation tokens + 3-token lookback
-  scripts/
-    pass0_create_table.py    ← CREATE + backfill 'original'
-    drop_bad_rows.py         ← price/rooms sanity drops
-    pass1_geocode.py         ← offline reverse_geocoder
-    pass1b_nominatim.py      ← rate-limited httpx + JSON cache + retries
-    pass2_text_extract.py    ← multilingual regex over descriptions
-    pass3_sentinel_fill.py   ← UNKNOWN-pending → UNKNOWN with drift guard
-    enrich_all.py            ← orchestrator with assert_no_nulls post-condition
-    generate_report.py       ← REPORT.md + fill_stats.json + dropped_rows.json + disagreements.json
-  data/
-    cache/nominatim.json     ← Nominatim response cache (write-through)
-    fill_stats.json          ← generated: machine-readable stats
-    dropped_rows.json        ← generated: every DROPPED_bad_data listing_id
-    disagreements.json       ← generated: structured-vs-geocoded canton mismatches
-  REPORT.md                  ← generated audit (mirrors analysis/REPORT.md shape)
-  tests/
-    conftest.py              ← session-scoped base_db + per-test enriched_db_pass0
-    unit/                    ← ~160 unit tests (regex × 4 langs, negation, cache, schema, …)
-    integration/             ← full-DB tests per pass (pass0 / pass1 / pass1b / pass2 / pass3 / orchestrator / drop_bad_rows)
-    crossref/                ← accuracy gates (landmark truth, regex-vs-structured, …)
-      fixtures/
-        landmark_truths.yaml ← 26 hand-labeled (lat, lng) → canton pairs
+    classDef store fill:#f7f7ff,stroke:#446
+    classDef done fill:#efe,stroke:#363
+    class LST,ENR store
+    class P3B done
 ```
 
-## Running
+---
 
-All commands assume Docker is up (`docker compose up -d api`).
+## Passes in detail
 
-### Full pipeline
+All scripts live in [`enrichment/scripts/`](scripts/). Each is idempotent — safe to re-run.
+
+| # | Script | Source | External API | Output columns |
+| --- | --- | --- | --- | --- |
+| 0a | [`pass0_create_table.py`](scripts/pass0_create_table.py) | `original` | — | all 41 fields backfilled from raw |
+| 0b | [`drop_bad_rows.py`](scripts/drop_bad_rows.py) | `DROPPED_bad_data` | — | rows with price/rooms sentinels marked |
+| 1a | [`pass1_geocode.py`](scripts/pass1_geocode.py) | `rev_geo_offline` | `reverse_geocoder` (offline GeoNames KD-tree) | `city_filled` (0.90), `canton_filled` (0.95) |
+| 1b | [`pass1b_nominatim.py`](scripts/pass1b_nominatim.py) | `nominatim_reverse` | **Nominatim** HTTP, hard 1 req/s | `postal_code_filled` (0.85), `street_filled` (0.75) |
+| 1b-bf | [`pass1b_backfill_canton.py`](scripts/pass1b_backfill_canton.py) | `nominatim_reverse` | — (cache only) | `canton_filled` from ISO3166-2-lvl4 in cached responses |
+| 1d | [`pass1d_canton_topup.py`](scripts/pass1d_canton_topup.py) | `rev_geo_offline_plz_vote` | — | canton via PLZ-prefix majority vote |
+| 1e | [`pass1e_canton_gpt_nano.py`](scripts/pass1e_canton_gpt_nano.py) | `gpt_5_4_nano` | **OpenAI gpt-5.4-nano** | canton for the last ~64 residual rows |
+| 1e-v | [`pass1e_verify.py`](scripts/pass1e_verify.py) | audit only | Nominatim + OpenAI | cross-check — no DB writes |
+| 2 (regex) | [`pass2_text_extract.py`](scripts/pass2_text_extract.py) | `text_regex_{lang}` | — | 12 features + year_built, floor, area, available_from, agency_* |
+| 2 (GPT) | [`pass2_gpt_extract.py`](scripts/pass2_gpt_extract.py) | `text_gpt_5_4` | **OpenAI gpt-5.4-mini** Structured Outputs, 16 concurrent async | same 12 targets as regex pass |
+| 2b | [`pass2b_bathroom_cellar_kitchen.py`](scripts/pass2b_bathroom_cellar_kitchen.py) | `text_gpt_5_4_nano_pass2b` | **OpenAI gpt-5.4-nano**, 10 concurrent async | `bathroom_count`, `bathroom_shared`, `has_cellar`, `kitchen_shared` |
+| 4 | [`pass4_landmark_mining.py`](scripts/pass4_landmark_mining.py) | cache only | **OpenAI gpt-5.4-nano** | writes `enrichment/data/cache/gpt_landmark_mining.jsonl` — consumed by [`ranking/scripts/t1_landmarks_aggregate.py`](../ranking/scripts/t1_landmarks_aggregate.py) |
+| 3 | [`pass3_sentinel_fill.py`](scripts/pass3_sentinel_fill.py) | `UNKNOWN` | — | every remaining `UNKNOWN-pending` promoted to `UNKNOWN` |
+
+---
+
+## Pass 2: regex vs GPT
+
+Both passes target the same 12 features + 6 metadata fields. GPT is the **default** because it handles multilingual paraphrases the regex catalogue misses.
+
+| | Pass 2 GPT (default) | Pass 2 regex (legacy) |
+| --- | --- | --- |
+| Model / logic | OpenAI gpt-5.4-mini, Structured Outputs | DE/FR/IT/EN regex + YAML patterns + ±5-token NegEx |
+| Cost | ~$50 / 25k listings | free |
+| Accuracy (500-row audit) | email 100%, phone 99%, year_built 94.7%, area 99% | varies by feature & language |
+| Languages | native DE/FR/IT/EN | per-language pattern sets in [`patterns/`](patterns/) |
+| Idempotent | yes (cache at [`data/cache/gpt_pass2.jsonl`](data/cache/)) | yes |
+
+Both write to the same `{field}_filled` / `_source` / `_confidence` / `_raw` quartet — the `_source` value lets the ranker tell them apart.
+
+---
+
+## Schema — 41 fields × 4 provenance columns
+
+From [`schema.py:33-85`](schema.py). Every field generates 4 columns:
+
+```python
+{name}_filled      TEXT NOT NULL   # real value or literal 'UNKNOWN'
+{name}_source      TEXT NOT NULL   # enum: original | rev_geo_offline |
+                                   #       text_regex_de | text_gpt_5_4 |
+                                   #       UNKNOWN | DROPPED_bad_data | …
+{name}_confidence  REAL NOT NULL   # ∈ [0.0, 1.0]
+{name}_raw         TEXT            # nullable audit snippet
+```
+
+**Field categories:**
+
+| Kind | Count | Examples |
+| --- | ---: | --- |
+| `listings_column` (mirrors raw source) | 31 | title, city, postal_code, price_chf, rooms, area_m2, latitude, … |
+| `raw_json` (parsed from nested JSON) | 6 | agency_name, agency_phone, agency_email, … |
+| `extraction_only` (not in raw, only derived) | 4 | bathroom_count, bathroom_shared, has_cellar, kitchen_shared |
+| **Total** | **41** | → 41 × 4 + 2 (listing_id, enriched_at) = **166 columns** |
+
+---
+
+## Patterns
+
+9 YAML files in [`enrichment/patterns/`](patterns/):
+
+```text
+features.yaml           floor.yaml            available_from.yaml
+negation.yaml           year_built.yaml       agency_name.yaml
+area.yaml               agency_phone.yaml     agency_email.yaml
+```
+
+Each YAML maps language → pattern → `(field, polarity, confidence)`. Negation is handled via a ±5-token NegEx window defined in `negation.yaml`.
+
+---
+
+## Tests — 307 passing
+
+24 test files across [`enrichment/tests/`](tests/):
+
+- **12 unit** — cantons, confidence, langdet, NegEx, Nominatim cache, pass1 guards, pass2 extensions, provenance, schema registry
+- **8 integration** — drop_bad_rows, orchestrator, pass0, pass1, pass1b, pass2, pass2 negated writes, pass3
+- **3 crossref / accuracy gates** — landmark geocoding, regex vs structured, accuracy gates
+- `conftest.py`
+
+Run: `uv run pytest enrichment/tests -q`
+
+---
+
+## Coverage (final)
+
+From [`FINAL_REPORT.md`](FINAL_REPORT.md), line 28-39. Cell-level breakdown across all 25,546 rows × 37 historical fields (the 4 `extraction_only` fields were added post-report):
+
+| Source | Cells | % |
+| --- | ---: | ---: |
+| `original` | 392,327 | 41.5 |
+| `UNKNOWN` | 491,993 | 52.1 |
+| `text_regex_de` | 27,274 | 2.9 |
+| `rev_geo_offline` | 22,048 | 2.3 |
+| `text_regex_fr` | 6,962 | 0.7 |
+| `DROPPED_bad_data` | 3,630 | 0.4 |
+| `text_regex_it` | 800 | 0.1 |
+| `text_regex_en` | 168 | 0.0 |
+
+The `UNKNOWN` share is intentional — fields like `agency_phone` are absent from most listings and we refuse to fabricate them. Ranker query-time logic treats `UNKNOWN` as "no signal", not "feature absent".
+
+---
+
+## Rebuild
 
 ```bash
-# Without Nominatim (~2 min, fast, no network)
-docker compose exec api uv run python -m enrichment.scripts.enrich_all \
-    --db /data/listings.db --skip-1b
+# offline passes only (no API keys needed)
+uv run python enrichment/scripts/pass0_create_table.py
+uv run python enrichment/scripts/drop_bad_rows.py
+uv run python enrichment/scripts/pass1_geocode.py
+uv run python enrichment/scripts/pass2_text_extract.py    # regex legacy fallback
 
-# With Nominatim (production; slow because of the 1 req/s rate limit)
-docker compose exec api uv run python -m enrichment.scripts.enrich_all \
-    --db /data/listings.db
+# HTTP + GPT passes (need OPENAI_API_KEY + NOMINATIM_CONTACT_EMAIL)
+uv run python enrichment/scripts/pass1b_nominatim.py
+uv run python enrichment/scripts/pass1b_backfill_canton.py
+uv run python enrichment/scripts/pass1d_canton_topup.py
+uv run python enrichment/scripts/pass1e_canton_gpt_nano.py
+uv run python enrichment/scripts/pass2_gpt_extract.py     # recommended default
+uv run python enrichment/scripts/pass2b_bathroom_cellar_kitchen.py
+uv run python enrichment/scripts/pass4_landmark_mining.py # feeds ranking/
 
-# With Nominatim, bounded (good for smoke testing pass 1b in CI-like conditions)
-docker compose exec api uv run python -m enrichment.scripts.enrich_all \
-    --db /data/listings.db --pass1b-limit 100
+# finalize
+uv run python enrichment/scripts/pass3_sentinel_fill.py
+uv run python enrichment/scripts/assert_no_nulls.py
 ```
 
-### Individual passes
-
-```bash
-docker compose exec api uv run python -m enrichment.scripts.pass0_create_table --db /data/listings.db
-docker compose exec api uv run python -m enrichment.scripts.drop_bad_rows     --db /data/listings.db
-docker compose exec api uv run python -m enrichment.scripts.pass1_geocode     --db /data/listings.db
-docker compose exec api uv run python -m enrichment.scripts.pass1b_nominatim  --db /data/listings.db --limit 100
-docker compose exec api uv run python -m enrichment.scripts.pass2_text_extract --db /data/listings.db
-docker compose exec api uv run python -m enrichment.scripts.pass3_sentinel_fill --db /data/listings.db
-```
-
-### Report
-
-```bash
-docker compose exec api uv run python -m enrichment.scripts.generate_report --db /data/listings.db
-# Faster (skips the live reverse_geocoder canton-disagreement scan):
-docker compose exec api uv run python -m enrichment.scripts.generate_report --db /data/listings.db --no-disagreements
-```
-
-### Tests
-
-```bash
-# All tests (~2 min, offline)
-docker compose exec api uv run pytest enrichment/tests/ -v
-
-# Just unit tests (instant)
-docker compose exec api uv run pytest enrichment/tests/unit/ -v
-
-# Just crossref accuracy gates
-docker compose exec api uv run pytest enrichment/tests/crossref/ -v
-```
-
-## Environment variables
-
-| Var | Default | Purpose |
-|---|---|---|
-| `NOMINATIM_BASE_URL` | `https://nominatim.openstreetmap.org` | Point at a self-hosted instance to bypass the 1 req/s ToS limit. |
-| `NOMINATIM_CONTACT_EMAIL` | `datathon2026-robin@example.invalid` | Required by Nominatim policy. Set to a real contact for production. |
-| `NOMINATIM_RATE_SEC` | `1.0` | Seconds between requests. Clamped to ≥ 1.0 even if set lower (ToS). |
-
-## Policy & safety rules
-
-1. **CLAUDE.md §5 — no silent fallbacks.** Every fallback path emits a
-   `[WARN] <context>: expected=... got=... fallback=...` line. No `except: pass`
-   that eats errors.
-2. **Never fabricate.** If a value can't be recovered, it becomes `UNKNOWN`
-   with `_source='UNKNOWN'` and `_confidence=0.0`. The ranker must not
-   surface UNKNOWN values as positive filter hits.
-3. **Registry-driven schema.** Adding a field means editing `schema.FIELDS`
-   once. Pass 3 `raise`s if the DB has `_filled` columns not in the
-   registry — no silent sentinel-fills of unknown columns.
-4. **Nominatim rate limit is non-negotiable.** The CLI clamps any rate below
-   1 s to 1 s and logs a `[WARN]`. Going faster risks a ban for the whole IP.
-5. **No downstream mutation to `listings`.** The enriched side table keeps
-   the harness-owned `listings` schema untouched (`_schema_matches()` guard
-   in `app/harness/bootstrap.py` would otherwise trip on schema drift).
-
-## What's out of scope
-
-The broader ranking-focused enrichment at the repo-root `Further Data Plan.md`
-(SBB GTFS routing, OSM POIs, CLIP image scoring, Claude vision, embeddings,
-SwissTopo DEM, etc.) is **not** part of this folder's responsibility. That's
-for the ranker build, not the null-fill contract.
+See [`docs/DEVELOPMENT.md`](../docs/DEVELOPMENT.md) for data-source prep.

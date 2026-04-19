@@ -16,7 +16,7 @@ Every architectural decision below is cross-referenced to either the published b
 
 ## 1. Challenge brief
 
-From [challenge.md](challenge.md) and the organizer's kickoff message:
+From [docs/CHALLENGE.md](docs/CHALLENGE.md) and the organizer's kickoff message:
 
 User queries mix two intents:
 
@@ -25,7 +25,7 @@ User queries mix two intents:
 
 Evaluation explicitly penalizes hard-filter violations more than weak ranking:
 
-> *"A system that regularly violates hard constraints by more than a margin is not a strong solution, even if its soft ranking looks good."* — [challenge.md:218-220](challenge.md#L218-L220)
+> *"A system that regularly violates hard constraints by more than a margin is not a strong solution, even if its soft ranking looks good."* — [docs/CHALLENGE.md](docs/CHALLENGE.md)
 
 ## 2. Success criteria (from organizer)
 
@@ -352,7 +352,7 @@ The public HTTPS URL will be pinned in the top of [README.md](README.md) per org
 
 ---
 
-## 12. Pushbacks vs plan v1 ([mahbod/PLAN.md](mahbod/PLAN.md))
+## 12. Pushbacks vs plan v1
 
 Cross-validated via parallel agent research and 20+ cited sources:
 
@@ -374,9 +374,9 @@ Cross-validated via parallel agent research and 20+ cited sources:
 | Phase | Deliverable | Hours | Ship-blocker? |
 |---|---|---|---|
 | 0 | Env + data (installed, zip extracted, S3 mirrored) | 0.25 | ✅ **done** |
-| 1a | `QueryPlan` + `SoftPreferences` Pydantic schemas in [app/models/schemas.py](app/models/schemas.py). Write [app/participant/query_plan.py](app/participant/query_plan.py) — Claude forced tool-use, strict, cached, 5 s timeout + regex fallback. Wire into `hard_fact_extraction.py` + `soft_fact_extraction.py`. | 3 | **yes** |
+| 1a | `QueryPlan` + `SoftPreferences` Pydantic schemas in [app/models/schemas.py](app/models/schemas.py). Query-plan logic lands in [app/participant/hard_fact_extraction.py](app/participant/hard_fact_extraction.py) — forced tool-use, strict, cached, 5 s timeout + regex fallback. Wires into `hard_fact_extraction.py` + `soft_fact_extraction.py`. | 3 | **yes** |
 | 1b | `bootstrap_participant()` hook in [app/main.py](app/main.py) lifespan (audit confirms it does not exist yet). Creates FTS5 + `listings_enriched`. Loads embeddings matrix into module-global numpy. | 1.5 | **yes** |
-| 1c | [app/participant/retrieval.py](app/participant/retrieval.py): SQL-gated BM25 + dense → RRF. | 1 | **yes** |
+| 1c | [app/harness/search_service.py](app/harness/search_service.py): SQL-gated BM25 + dense → RRF. | 1 | **yes** |
 | 1d | Rewrite [app/participant/ranking.py](app/participant/ranking.py): bge-reranker on top-50 + 8-signal linear blend + templated explanations. | 1.5 | **yes** |
 | 2 | Enrichment scripts: `reverse_geocoder`, text-feature regex+NegEx, Arctic-Embed-L doc vectors, SigLIP-2 image scores, SBB GTFS, Wikidata landmarks. Single runner `scripts/enrich_all.py`. | 5 | **yes (embeddings + text features minimum)** |
 | 3 | Relaxation ladder, fuzzy city, clarification. | 2 | yes |

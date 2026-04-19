@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 from app.api.routes.auth import router as auth_router
@@ -94,6 +94,16 @@ if _DEMO_DIR.exists() and (_DEMO_DIR / "demo.html").exists():
     @app.get("/demo", include_in_schema=False)
     def demo_page() -> FileResponse:
         return FileResponse(str(_DEMO_DIR / "demo.html"))
+
+    @app.get("/", include_in_schema=False)
+    def root_redirect() -> RedirectResponse:
+        """Send the base URL to the live demo UI.
+
+        Stakeholders sharing the ngrok root URL land on ``{"detail":"Not
+        Found"}`` otherwise — FastAPI has no default route. 307 so clients
+        preserve the method if they ever POST to ``/`` by mistake.
+        """
+        return RedirectResponse(url="/demo", status_code=307)
 else:
     print(
         f"[WARN] demo_page_missing: expected=demo.html in {_DEMO_DIR}, "
