@@ -72,6 +72,14 @@ SIGNALS: list[RankingSignal] = [
         "Sample size of the PLZ×rooms bucket this listing compares against.",
         "ranking/scripts/t1_price_baselines.py",
     ),
+    RankingSignal(
+        "price_plausibility", "TEXT", "price",
+        "'normal' | 'suspect' | NULL. 'suspect' = ABS(price_delta_pct_canton_rooms) > 3.0 "
+        "(listing is 300%+ from its canton×rooms bucket median). Ranker should demote "
+        "suspect rows and exclude them from price-fit percentile normalisation. "
+        "NULL iff price_delta_pct_canton_rooms is NULL.",
+        "ranking/scripts/t1_signal_hardening.py",
+    ),
 
     # --- Tier 2.1 GTFS nearest-stop ----------------------------------------
     RankingSignal(
@@ -98,6 +106,14 @@ SIGNALS: list[RankingSignal] = [
         "nearest_stop_lines_count", "INTEGER", "geo",
         "Number of distinct routes serving the nearest stop.",
         "ranking/scripts/t2_gtfs_nearest.py",
+    ),
+    RankingSignal(
+        "nearest_stop_lines_log", "REAL", "geo",
+        "ln(1 + nearest_stop_lines_count). Stabilises the transit-hub magnitude "
+        "signal so the Cornavin (41,083) / Bel-Air (30,947) mega-hubs don't "
+        "dominate normalisation in the blend. NULL iff nearest_stop_lines_count "
+        "is NULL.",
+        "ranking/scripts/t1_signal_hardening.py",
     ),
 
     # --- Tier 2.2 OSM POI density ------------------------------------------
