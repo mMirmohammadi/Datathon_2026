@@ -131,8 +131,11 @@ def test_soft_fact_transit_close_and_many_lines_is_good() -> None:
 def test_soft_fact_price_sentiment_cheap_when_below_baseline() -> None:
     listing = _listing()
     hard = HardFilters(soft_preferences=SoftPreferences(price_sentiment="cheap"))
+    # `price_delta_pct_canton_rooms` is stored as a fraction (−0.15 == 15%
+    # below); see ranking/schema.py:56-64. The display/threshold code in
+    # _price_fact converts to percent exactly once.
     row = _make_row({
-        "price_delta_pct_canton_rooms": -15.0,
+        "price_delta_pct_canton_rooms": -0.15,
         "price_delta_pct_plz_rooms": None,
         "price_plausibility": "plausible",
     })
@@ -143,7 +146,7 @@ def test_soft_fact_price_sentiment_cheap_when_below_baseline() -> None:
 
     # suspect flag always demotes to poor
     row = _make_row({
-        "price_delta_pct_canton_rooms": -40.0,
+        "price_delta_pct_canton_rooms": -0.40,
         "price_delta_pct_plz_rooms": None,
         "price_plausibility": "suspect",
     })

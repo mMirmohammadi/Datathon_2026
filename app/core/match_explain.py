@@ -261,8 +261,13 @@ def _price_fact(row: sqlite3.Row | None, sentiment: str) -> MatchFact:
             interpretation=_INTERP_UNKNOWN,
         )
 
-    sign = "below" if delta < 0 else "above"
-    value = f"{abs(delta):.0f}% {sign} {basis} baseline"
+    # ``price_delta_pct_*`` is stored as a ratio by t1_price_baselines.py
+    # (e.g. -0.15 for "15% below bucket median"), despite the "_pct_" name.
+    # See ranking/schema.py:56-64 and ranking/scripts/t1_price_baselines.py:172.
+    # Convert to percent exactly once here for both display and thresholding.
+    delta_pct = float(delta) * 100.0
+    sign = "below" if delta_pct < 0 else "above"
+    value = f"{abs(delta_pct):.0f}% {sign} {basis} baseline"
     # Enrich with the concrete numbers when we have them.
     baseline_parts: list[str] = []
     if baseline_chf is not None:
@@ -277,8 +282,8 @@ def _price_fact(row: sqlite3.Row | None, sentiment: str) -> MatchFact:
     wants_cheap = sentiment == "cheap"
     # Rule: cheap wants lower, premium wants higher. A 10-point gap is
     # "good"; within ±10 is "ok"; opposite sign is "poor".
-    good = (wants_cheap and delta <= -10) or (not wants_cheap and delta >= 10)
-    poor = (wants_cheap and delta >= 10) or (not wants_cheap and delta <= -10)
+    good = (wants_cheap and delta_pct <= -10) or (not wants_cheap and delta_pct >= 10)
+    poor = (wants_cheap and delta_pct >= 10) or (not wants_cheap and delta_pct <= -10)
     interp = (
         _INTERP_GOOD if good
         else _INTERP_POOR if poor

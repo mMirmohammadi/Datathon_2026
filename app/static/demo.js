@@ -64,6 +64,20 @@ const authState = {
   dismissedIds: new Set(),        // sticky per-session demotions
 };
 
+// Tri-state for the DINOv2 "look-alike homes" feature:
+//   null  = unknown (no probe yet, render the button optimistically)
+//   true  = confirmed available (at least one 2xx seen)
+//   false = confirmed off on this server (any 503 seen) — hide every button
+// We discover this lazily from the first /similar response instead of a
+// dedicated health endpoint, so there's no extra startup round-trip.
+let similarFeatureAvailable = null;
+
+function hideAllSimilarButtons() {
+  document.querySelectorAll(".find-similar-btn").forEach((btn) => {
+    btn.remove();
+  });
+}
+
 const FEATURE_KEYS_HARD = new Set([
   "balcony",
   "elevator",
@@ -699,11 +713,15 @@ function renderDetail(res) {
             : ""
         }
 
-        <button type="button" class="find-similar-btn" data-similar-id="${esc(
-          res.listing_id,
-        )}" data-similar-title="${esc(listing.title || res.listing_id)}">
+        ${
+          similarFeatureAvailable === false
+            ? ""
+            : `<button type="button" class="find-similar-btn" data-similar-id="${esc(
+                res.listing_id,
+              )}" data-similar-title="${esc(listing.title || res.listing_id)}">
           🔍 Show me homes that look like this
-        </button>
+        </button>`
+        }
       </div>
       <div class="detail-block">
         <h4>How well it matches your nice-to-haves <span class="count">${
@@ -1637,13 +1655,24 @@ async function openSimilarModal(listingId, sourceTitle) {
       { credentials: "same-origin" },
     );
     if (r.status === 503) {
-      els.similarBody.innerHTML = `<p class="empty">The look-alike-homes feature is turned off on this server. Ask an admin to enable it.</p>`;
+      // Feature confirmed off on this server (usually: DINOv2 store not
+      // built yet). Remember it and hide the button on every card so the
+      // next click never reaches this branch.
+      similarFeatureAvailable = false;
+      hideAllSimilarButtons();
+      console.warn(
+        "[WARN] look_alike_feature_off: " +
+          "expected=/listings/{id}/similar returns 2xx, got=HTTP 503, " +
+          "fallback=hide the 'Show me homes that look like this' button for this session",
+      );
+      els.similarBody.innerHTML = `<p class="empty">The look-alike-homes feature isn't set up on this server yet, so we'll hide this option for now.</p>`;
       return;
     }
     if (!r.ok) {
       els.similarBody.innerHTML = `<p class="empty">Couldn't load look-alikes (error ${r.status}).</p>`;
       return;
     }
+    similarFeatureAvailable = true;
     data = await r.json();
   } catch (e) {
     els.similarBody.innerHTML = `<p class="empty">Can't reach the server: ${esc(e.message)}</p>`;
