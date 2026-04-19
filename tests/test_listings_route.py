@@ -350,6 +350,16 @@ def test_get_listing_returns_full_data(tmp_path, monkeypatch) -> None:
     assert "rooms" in body
     assert "image_urls" in body and isinstance(body["image_urls"], (list, type(None)))
     assert "features" in body and isinstance(body["features"], list)
+    # Address fields needed by the "Show on Google Maps" + address-line UI.
+    # Presence, not content — not every row has every value. The front-end
+    # helpers render nothing when all five are null, which is valid prod state.
+    assert "street" in body
+    assert "house_number" in body
+    assert "postal_code" in body
+    assert "city" in body
+    assert "canton" in body
+    assert "latitude" in body
+    assert "longitude" in body
 
 
 def test_get_listing_404(tmp_path) -> None:

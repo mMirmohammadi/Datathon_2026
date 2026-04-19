@@ -92,6 +92,7 @@ class ListingData(BaseModel):
     title: str
     description: str | None = None
     street: str | None = None
+    house_number: str | None = None
     city: str | None = None
     postal_code: str | None = None
     canton: str | None = None
