@@ -2356,3 +2356,84 @@ code {
 .listing-detail-modal .listing-actions.variant-card {
   margin: 10px 0 4px 0;
 }
+
+/* ---------- Nearby landmarks chip row ------------------------------------
+   Shown on every listing card and in the listing-detail modal. Each chip is
+   a deep-link into Google Maps Directions (transit mode) from the listing
+   to the landmark. Styled as an outlined pill with an icon, name, and a
+   subdued metric (distance · transit time). Hovers flip to a mild fill so
+   the link affordance is obvious without being shouty. */
+
+.nearby-landmarks {
+  margin: 6px 0 2px 0;
+}
+
+.nearby-landmarks .lm-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10.5px;
+  margin-bottom: 4px;
+}
+
+.nearby-landmarks .lm-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.landmark-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.15;
+  border-radius: 999px;
+  background: rgba(26, 115, 232, 0.08);
+  border: 1px solid rgba(26, 115, 232, 0.35);
+  color: var(--ink);
+  text-decoration: none;
+  transition: background 0.12s, border-color 0.12s, transform 0.08s;
+  white-space: nowrap;
+}
+
+.landmark-chip:hover {
+  background: rgba(26, 115, 232, 0.18);
+  border-color: rgba(26, 115, 232, 0.6);
+}
+
+.landmark-chip:active {
+  transform: scale(0.97);
+}
+
+.landmark-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.landmark-chip .lm-ico {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.landmark-chip .lm-name {
+  font-weight: 500;
+}
+
+.landmark-chip .lm-metric {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  opacity: 0.85;
+}
+
+.nearby-landmarks.variant-compact .landmark-chip {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+/* Slight tweak when the chip row sits inside the detail modal — the modal
+   has its own padding rhythm, so add a little breathing room above. */
+.listing-detail-modal .nearby-landmarks {
+  margin-top: 10px;
+}

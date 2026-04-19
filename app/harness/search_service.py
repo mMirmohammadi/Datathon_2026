@@ -10,6 +10,7 @@ from app.core.dinov2_search import (
     score_candidates_for_image,
 )
 from app.core.hard_filters import HardFilterParams, search_listings
+from app.core.landmark_proximity import compute_for_listings
 from app.core.match_explain import build_match_detail
 from app.core.soft_signals import (
     _load_commute_rows,
@@ -339,6 +340,7 @@ def query_from_text(
     candidates = candidates[offset : offset + limit]
     candidates = filter_soft_facts(candidates, soft_facts)
     _attach_match_details(candidates, hard_facts, db_path)
+    _attach_nearby_landmarks(candidates, db_path)
     return ListingsResponse(
         listings=rank_listings(candidates, soft_facts),
         meta={
@@ -406,6 +408,35 @@ def _attach_match_details(
             signal_row=rows.get(lid),
             commute_rows=commute_rows,
         )
+
+
+def _attach_nearby_landmarks(
+    candidates: list[dict[str, Any]],
+    db_path: Path,
+) -> None:
+    """Attach ``nearby_landmarks`` (top-K closest) to each candidate in place.
+
+    One batched query for 45 Haversine distance columns + one for r5py
+    commute minutes, regardless of how many candidates. Every candidate
+    gets the key set (possibly to ``[]`` for listings with no coords)
+    so downstream ``_to_listing_data`` never has to branch on absence.
+    """
+    if not candidates:
+        return
+    listing_ids = [str(c["listing_id"]) for c in candidates]
+    try:
+        by_lid = compute_for_listings(db_path, listing_ids)
+    except Exception as exc:
+        print(
+            f"[WARN] _attach_nearby_landmarks: expected=landmark proximity "
+            f"for top-K, got={type(exc).__name__}: {exc}, "
+            f"fallback=empty chip lists",
+            flush=True,
+        )
+        by_lid = {}
+    for candidate in candidates:
+        lid = str(candidate["listing_id"])
+        candidate["nearby_landmarks"] = by_lid.get(lid) or []
 
 
 def default_feed(
@@ -478,6 +509,7 @@ def default_feed(
 
     top = candidates[:limit]
     _attach_match_details(top, empty_hard, db_path)
+    _attach_nearby_landmarks(top, db_path)
 
     return ListingsResponse(
         listings=rank_listings(top, {"raw_query": ""}),

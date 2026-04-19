@@ -16,6 +16,7 @@ from app.core.dinov2_search import (
     is_loaded as dinov2_is_loaded,
 )
 from app.core.hard_filters import _parse_row
+from app.core.landmark_proximity import compute_for_one as compute_nearby_landmarks
 from app.db import get_connection
 from app.harness.search_service import default_feed, query_from_filters, query_from_text
 from app.models.schemas import (
@@ -108,7 +109,14 @@ def get_listing(listing_id: str) -> ListingData:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"listing {listing_id!r} not found",
         )
-    return _to_listing_data(_parse_row(dict(row)))
+    parsed = _parse_row(dict(row))
+    # Enrich with the top-K nearest landmarks so the detail modal can render
+    # the Google-Maps-Directions chip row. One batched DB hit; returns [] for
+    # the 1'637 geo-less listings and the detail modal degrades silently.
+    parsed["nearby_landmarks"] = compute_nearby_landmarks(
+        settings.db_path, str(listing_id),
+    )
+    return _to_listing_data(parsed)
 
 
 @router.post("/listings/search/filter", response_model=ListingsResponse)

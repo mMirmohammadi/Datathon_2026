@@ -210,6 +210,124 @@ function renderAddressBlock(L, { cls = "listing-address" } = {}) {
   return `<div class="${esc(cls)}">${addrPart}${mapsPart}</div>`;
 }
 
+// ---------- Nearby landmarks + Google Maps directions ---------------------
+//
+// Every listing carries a ``nearby_landmarks`` list (top-K closest of 45
+// curated Swiss landmarks). Each chip is a deep-link into Google Maps
+// Directions from the listing's coords → landmark coords, so the user sees
+// not just "ETH Zentrum is 700 m away" but "14 min by transit, here's the
+// route".
+//
+// Security: origin + destination coords go through `.toFixed(6)` (float →
+// string, no URL metachars possible) before being spliced into the query
+// string. ``travelmode`` is hardcoded to `transit`; no user-controlled
+// enum. Labels are `esc()`-escaped before hitting the DOM.
+
+// Build a Google Maps directions URL: origin → destination, transit mode.
+// Returns null when either endpoint is not a valid coord pair; caller
+// suppresses the chip in that case (not silent; the missing chip IS the
+// signal that the deep-link is unavailable for this listing).
+function googleMapsDirectionsUrl(origin, destination, { mode = "transit" } = {}) {
+  const valid = (p) =>
+    p &&
+    typeof p.latitude === "number" &&
+    typeof p.longitude === "number" &&
+    Number.isFinite(p.latitude) &&
+    Number.isFinite(p.longitude) &&
+    !(p.latitude === 0 && p.longitude === 0);
+  // Destination shape can be {lat, lng} OR {latitude, longitude}; normalise.
+  const destOk =
+    destination &&
+    (typeof destination.latitude === "number" ||
+      typeof destination.lat === "number");
+  if (!valid(origin) || !destOk) return null;
+  const destLat = destination.latitude ?? destination.lat;
+  const destLng = destination.longitude ?? destination.lng;
+  if (!Number.isFinite(destLat) || !Number.isFinite(destLng)) return null;
+  const o = `${origin.latitude.toFixed(6)},${origin.longitude.toFixed(6)}`;
+  const d = `${destLat.toFixed(6)},${destLng.toFixed(6)}`;
+  const travelmode = mode === "walking" || mode === "driving" || mode === "bicycling" || mode === "transit"
+    ? mode
+    : "transit";
+  return `https://www.google.com/maps/dir/?api=1&origin=${o}&destination=${d}&travelmode=${travelmode}`;
+}
+
+// Format one landmark's distance + optional transit minutes as a short
+// secondary line. Degrades gracefully: "700 m" or "700 m · 14 min" or "" if
+// we have nothing to say (caller then renders just the name + icon).
+function _formatLandmarkMetric(lm) {
+  const parts = [];
+  if (typeof lm.distance_m === "number" && Number.isFinite(lm.distance_m)) {
+    parts.push(lm.distance_m >= 1000
+      ? `${(lm.distance_m / 1000).toFixed(1)} km`
+      : `${Math.round(lm.distance_m)} m`);
+  }
+  if (typeof lm.transit_min === "number" && Number.isFinite(lm.transit_min)) {
+    parts.push(`${lm.transit_min} min`);
+  }
+  return parts.join(" · ");
+}
+
+// Kind → pictograph for the chip prefix. Categories come from
+// `data/ranking/landmarks.json` (university / transit / lake / neighborhood
+// / oldtown / cultural / employer). Unknown kinds fall back to a neutral pin.
+const _LANDMARK_ICONS = {
+  university: "🎓",
+  transit: "🚉",
+  lake: "💧",
+  neighborhood: "🏘",
+  oldtown: "🏛",
+  cultural: "🎭",
+  employer: "🏢",
+};
+
+function _landmarkIcon(kind) {
+  return _LANDMARK_ICONS[kind] || "📍";
+}
+
+// Render the nearby-landmarks chip row for one listing. ``variant`` controls
+// layout (card vs compact); ``limit`` caps how many chips show on small
+// surfaces. Empty string when the listing has no coords OR the landmark
+// list is empty — never a stub, because a stub implies "we tried" which
+// would be misleading.
+function renderNearbyLandmarks(L, { variant = "card", limit = 5 } = {}) {
+  if (!L) return "";
+  const list = Array.isArray(L.nearby_landmarks) ? L.nearby_landmarks : [];
+  if (list.length === 0) return "";
+  if (
+    typeof L.latitude !== "number" ||
+    typeof L.longitude !== "number" ||
+    !Number.isFinite(L.latitude) ||
+    !Number.isFinite(L.longitude)
+  ) {
+    // No origin coords ⇒ can't build a directions link. Silently skip: the
+    // chip without a link would just be trivia the user can't act on.
+    return "";
+  }
+  const shown = list.slice(0, Math.max(1, Math.min(list.length, limit | 0)));
+  const origin = { latitude: L.latitude, longitude: L.longitude };
+  const chips = shown
+    .map((lm) => {
+      const url = googleMapsDirectionsUrl(origin, lm);
+      if (!url) return "";
+      const icon = _landmarkIcon(lm.kind);
+      const name = lm.name || lm.key || "landmark";
+      const metric = _formatLandmarkMetric(lm);
+      const title = metric
+        ? `Directions from this home to ${name} (${metric})`
+        : `Directions from this home to ${name}`;
+      return `<a class="landmark-chip" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(title)}">
+        <span class="lm-ico">${icon}</span>
+        <span class="lm-name">${esc(name)}</span>
+        ${metric ? `<span class="lm-metric muted">${esc(metric)}</span>` : ""}
+      </a>`;
+    })
+    .join("");
+  if (!chips.trim()) return "";
+  const label = variant === "compact" ? "" : `<div class="lm-label muted small">Nearby</div>`;
+  return `<div class="nearby-landmarks variant-${esc(variant)}">${label}<div class="lm-chip-row">${chips}</div></div>`;
+}
+
 // Decide whether a result batch should render with rank-score badges (#1 TOP
 // 0.123), or without (random / anon-default feed).
 //
@@ -1002,6 +1120,7 @@ function renderListings(listings, meta) {
             }
           </div>
           ${renderAddressBlock(listing, { cls: "listing-address summary" })}
+          ${renderNearbyLandmarks(listing, { variant: "card", limit: 3 })}
           ${
             listing.description
               ? `<div class="listing-desc">${sanitizeDescriptionHtml(listing.description)}</div>`
@@ -2143,6 +2262,7 @@ function renderListingDetail(L) {
     <div class="detail-meta">${metaParts.join(" · ")}</div>
     ${renderListingActions(L.id, { variant: "card" })}
     ${addressBlock}
+    ${renderNearbyLandmarks(L, { variant: "card", limit: 8 })}
     ${
       (L.features || []).length
         ? `<div class="detail-features">${L.features

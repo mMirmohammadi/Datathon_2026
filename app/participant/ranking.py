@@ -155,6 +155,7 @@ def _to_listing_data(candidate: dict[str, Any]) -> ListingData:
         bathroom_shared=candidate.get("bathroom_shared"),
         has_cellar=candidate.get("has_cellar"),
         kitchen_shared=candidate.get("kitchen_shared"),
+        nearby_landmarks=candidate.get("nearby_landmarks") or [],
     )
 
 

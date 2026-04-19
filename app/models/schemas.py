@@ -87,6 +87,30 @@ class ListingsSearchRequest(BaseModel):
     hard_filters: HardFilters | None = None
 
 
+class NearbyLandmark(BaseModel):
+    """One row of the 'closest landmarks' chip list on a listing card.
+
+    ``key`` / ``name`` / ``lat`` / ``lng`` come from
+    :mod:`app.core.landmarks` (the 45-entry curated Swiss gazetteer).
+    ``distance_m`` is the Haversine distance from the listing to the landmark
+    in metres (primary sort key; 94% coverage). ``transit_min`` is the real
+    r5py / GTFS door-to-door peak-hour commute when available (~24% coverage)
+    — absent on listings r5py could not route.
+
+    The UI builds a Google Maps directions deep link from the listing's
+    ``latitude`` / ``longitude`` to (``lat``, ``lng``). See
+    ``googleMapsDirectionsUrl`` in ``demo.js``.
+    """
+
+    key: str
+    name: str
+    kind: str
+    lat: float
+    lng: float
+    distance_m: float | None = None
+    transit_min: int | None = None
+
+
 class ListingData(BaseModel):
     id: str
     title: str
@@ -116,6 +140,11 @@ class ListingData(BaseModel):
     bathroom_shared: bool | None = None
     has_cellar: bool | None = None
     kitchen_shared: bool | None = None
+    # Top closest landmarks (sorted by Haversine distance ascending). Drives
+    # the "nearby landmarks" chip row that deep-links into Google Maps
+    # Directions from listing → landmark. Empty list is normal for the 1'637
+    # listings with NULL coords; never None so the UI can iterate safely.
+    nearby_landmarks: list["NearbyLandmark"] = Field(default_factory=list)
 
 
 class RankingBreakdown(BaseModel):
