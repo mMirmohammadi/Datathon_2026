@@ -210,6 +210,27 @@ function renderAddressBlock(L, { cls = "listing-address" } = {}) {
   return `<div class="${esc(cls)}">${addrPart}${mapsPart}</div>`;
 }
 
+// Decide whether a result batch should render with rank-score badges (#1 TOP
+// 0.123), or without (random / anon-default feed).
+//
+// True when any of:
+//   * backend flagged it as an unpersonalized default feed, OR
+//   * every listing's score is 0 / null (no channel fired)
+//
+// False as soon as one listing has a non-zero score — that means at least
+// one ranking channel (BM25 / visual / semantic / soft / memory) fired and
+// the ordering is meaningful.
+//
+// Extracted into a named helper so we can unit-test it independently of the
+// DOM-heavy renderListings pipeline.
+function isUnscoredBatch(listings, meta) {
+  if (meta && meta.default_feed && !meta.personalized) return true;
+  if (!Array.isArray(listings) || listings.length === 0) return true;
+  return listings.every(
+    (r) => !r || r.score == null || r.score === 0,
+  );
+}
+
 // Pass-2b display helpers. All 4 fields are tri-state (true / false / null for
 // UNKNOWN). Renders one chip per field that has a known value; empty string
 // when UNKNOWN, so the chip row collapses cleanly for listings whose extractor
@@ -893,6 +914,10 @@ function renderListings(listings, meta) {
     meta.pipeline || null,
   );
 
+  // Batch-level "is this an unranked random selection?" decision.
+  // See `isUnscoredBatch` for the rule and rationale.
+  const unscored = isUnscoredBatch(listings, meta);
+
   dwellTracker.reset();
 
   listings.forEach((res, idx) => {
@@ -900,7 +925,9 @@ function renderListings(listings, meta) {
     const images = [listing.hero_image_url, ...(listing.image_urls || [])]
       .filter(Boolean)
       .filter((v, i, a) => a.indexOf(v) === i);
-    const isTop = idx === 0;
+    // "TOP" + gold border only make sense when the ranking is real.
+    // Suppress both on an unscored (random / anon default) feed.
+    const isTop = !unscored && idx === 0;
     const listingId = String(res.listing_id);
     const isLiked = authState.likedIds.has(listingId);
     const isBookmarked = authState.bookmarkedIds.has(listingId);
@@ -935,14 +962,18 @@ function renderListings(listings, meta) {
         <div class="listing-body">
           <div class="listing-head">
             <h3 class="listing-title">${esc(listing.title || "(no title)")}</h3>
-            <div class="rank-score">
+            ${
+              unscored
+                ? ""
+                : `<div class="rank-score">
               <div class="rank ${isTop ? "top" : ""}">#${idx + 1}${
-                isTop ? '<span class="rank-badge-top">TOP</span>' : ""
-              }</div>
+                    isTop ? '<span class="rank-badge-top">TOP</span>' : ""
+                  }</div>
               <div class="score" title="Final RRF score">${res.score.toFixed(
                 3,
               )}</div>
-            </div>
+            </div>`
+            }
           </div>
           ${
             authState.user || memBoost

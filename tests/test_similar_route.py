@@ -77,19 +77,28 @@ def test_similar_happy_path_with_mock_index(tmp_path, monkeypatch) -> None:
 
         # Post-d7d95e2 the route fuses 3 channels via
         # ``find_similar_listings_fused`` which returns ``listing_id``s
-        # directly (no platform_id round-trip) and a ``best_image_ids`` map.
-        # Mock both to produce a deterministic 2-listing result.
+        # directly (no platform_id round-trip), a ``best_image_ids`` map,
+        # and a ``image_cosines`` map (added later so the UI can show raw
+        # image-cosine alongside the fused score). Mock the 3-tuple.
         fake_ranked = [
             (rows[1]["listing_id"], 0.91),
             (rows[2]["listing_id"], 0.88),
         ]
         fake_best_images: dict[str, str] = {}
+        # The route exposes ``image_cosines`` (not the fused score) on
+        # ``SimilarListing.cosine``. An empty map here triggers a [WARN] and
+        # the response carries cosine=0.0 — provide real values so the test
+        # pins the contract end-to-end.
+        fake_image_cosines = {
+            rows[1]["listing_id"]: 0.91,
+            rows[2]["listing_id"]: 0.88,
+        }
 
         from app.api.routes import listings as listings_route
         monkeypatch.setattr(
             listings_route, "find_similar_listings_fused",
             lambda *, listing_id, platform_id, db_path, k=10: (
-                fake_ranked, fake_best_images
+                fake_ranked, fake_best_images, fake_image_cosines
             ),
         )
         monkeypatch.setattr(listings_route, "dinov2_is_loaded", lambda: True)
