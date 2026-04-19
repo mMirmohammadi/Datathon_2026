@@ -40,6 +40,9 @@ const els = {
   similarModal: document.getElementById("similar-modal"),
   similarBody: document.getElementById("similar-modal-body"),
   similarTitle: document.getElementById("similar-modal-title"),
+  tasteBtn: document.getElementById("taste-btn"),
+  tasteModal: document.getElementById("taste-modal"),
+  tasteBody: document.getElementById("taste-body"),
 };
 
 // ---------- auth + interaction client state ---------------------------------
@@ -1625,6 +1628,104 @@ function closeSimilarModal() {
   }
 }
 
+// ---------- taste / profile-summary modal -----------------------------------
+
+async function openTasteModal() {
+  if (!els.tasteModal || !authState.user) return;
+  els.tasteBody.innerHTML = '<p class="muted">Loading…</p>';
+  if (typeof els.tasteModal.showModal === "function") {
+    els.tasteModal.showModal();
+  } else {
+    els.tasteModal.setAttribute("open", "");
+  }
+  let summary;
+  try {
+    const r = await fetch("/me/profile", { credentials: "same-origin" });
+    if (!r.ok) {
+      els.tasteBody.innerHTML = `<p class="empty">Could not load profile (HTTP ${r.status}).</p>`;
+      return;
+    }
+    summary = await r.json();
+  } catch (e) {
+    els.tasteBody.innerHTML = `<p class="empty">Network error: ${esc(e.message)}</p>`;
+    return;
+  }
+  renderTasteSummary(summary);
+}
+
+function closeTaste() {
+  if (!els.tasteModal) return;
+  if (typeof els.tasteModal.close === "function") {
+    els.tasteModal.close();
+  } else {
+    els.tasteModal.removeAttribute("open");
+  }
+}
+
+function renderTasteSummary(s) {
+  const stats = s.stats || { likes: 0, bookmarks: 0, dismissals: 0 };
+  const liked = s.liked_features || [];
+  const avoided = s.avoided_features || [];
+  const price = s.price_range_chf;
+
+  // Cold-start copy: direct the user to the actions that unlock personalization.
+  const coldStart = `
+    <p class="taste-cold">
+      Not enough activity yet to personalize your results.
+      Like (♡) or save (☆) a few listings you find interesting and your taste will start showing up here.
+      <br><span class="muted small">(${esc(s.positive_count)} positive interaction${s.positive_count === 1 ? "" : "s"} so far; need at least 3.)</span>
+    </p>
+  `;
+
+  const tagRow = (items, tone) =>
+    items.length
+      ? `<div class="taste-tags">${items
+          .map(
+            (it) =>
+              `<span class="taste-chip ${tone}" title="confidence ${Math.round(Math.abs(it.weight) * 100)}%">${esc(it.label)}</span>`,
+          )
+          .join("")}</div>`
+      : `<p class="muted small">Nothing confidently inferred yet on this axis.</p>`;
+
+  const statsRow = `
+    <div class="taste-stats">
+      <div><strong>${stats.likes}</strong><span class="muted small">likes</span></div>
+      <div><strong>${stats.bookmarks}</strong><span class="muted small">saved</span></div>
+      <div><strong>${stats.dismissals}</strong><span class="muted small">dismissed</span></div>
+    </div>
+  `;
+
+  const priceRow = price
+    ? `
+      <section class="taste-section">
+        <h3>Typical price</h3>
+        <p class="taste-price">Around <strong>${chf(price.mid_chf)}</strong>/month
+          <span class="muted small">(${chf(price.low_chf)} – ${chf(price.high_chf)})</span></p>
+      </section>`
+    : "";
+
+  // The "You tend to avoid" section is intentionally hidden for now.
+  // The backend still computes and returns ``avoided_features`` so we can
+  // turn it back on by re-adding its <section> block - no server change.
+  const body = s.is_cold_start
+    ? `${statsRow}${coldStart}`
+    : `
+      ${statsRow}
+      <section class="taste-section">
+        <h3>You tend to prefer</h3>
+        ${tagRow(liked, "liked")}
+      </section>
+      ${priceRow}
+      <p class="muted small taste-caveat">
+        Derived from your recent likes, saves, dwell time, and dismissals
+        (last 180 days). Toggle <b>Personalize</b> off in the topbar to
+        compare against the anonymous ranking.
+      </p>
+    `;
+
+  els.tasteBody.innerHTML = body;
+}
+
 function renderListingDetail(L) {
   els.detailTitle.textContent = L.title || "(no title)";
   const images = [L.hero_image_url, ...(L.image_urls || [])]
@@ -1871,6 +1972,9 @@ document.querySelectorAll("[data-detail-close]").forEach((btn) => {
 document.querySelectorAll("[data-similar-close]").forEach((btn) => {
   btn.addEventListener("click", closeSimilarModal);
 });
+document.querySelectorAll("[data-taste-close]").forEach((btn) => {
+  btn.addEventListener("click", closeTaste);
+});
 
 if (els.authTabs) {
   els.authTabs.querySelectorAll(".tab").forEach((tab) => {
@@ -1890,12 +1994,15 @@ if (els.deleteAccountBtn) {
 if (els.favoritesBtn) {
   els.favoritesBtn.addEventListener("click", openFavorites);
 }
+if (els.tasteBtn) {
+  els.tasteBtn.addEventListener("click", openTasteModal);
+}
 if (els.clearHistoryBtn) {
   els.clearHistoryBtn.addEventListener("click", clearHistory);
 }
 
 // Close dialogs on backdrop click.
-[els.authModal, els.favoritesModal, els.detailModal].forEach((dlg) => {
+[els.authModal, els.favoritesModal, els.detailModal, els.tasteModal].forEach((dlg) => {
   if (!dlg) return;
   dlg.addEventListener("click", (ev) => {
     if (ev.target === dlg) {

@@ -35,6 +35,9 @@
               <button type="button" class="auth-btn" id="favorites-btn" title="Open the homes you've saved">
                 💖 My favorites (<span id="favorites-count">0</span>)
               </button>
+              <button type="button" class="auth-btn" id="taste-btn" title="See what the system has learned about your preferences" hidden>
+                🧠 Your taste
+              </button>
               <button type="button" class="auth-btn" data-auth-open="account">⚙ Account</button>
               <button type="button" class="auth-btn ghost" id="logout-btn">Log out</button>
             </div>
@@ -116,6 +119,21 @@
         <footer class="modal-foot spread">
           <button type="button" class="auth-btn danger" id="clear-history-btn">Start over (erase my history)</button>
         </footer>
+      </div>
+    </dialog>
+
+    <!-- Taste / profile-summary modal. Read-only view of what the memory
+         profile has learned: liked + avoided features, typical price band,
+         activity counts. Opens from the "Your taste" button in the topbar. -->
+    <dialog id="taste-modal" class="modal taste-modal" aria-labelledby="taste-modal-title">
+      <div class="modal-inner">
+        <header class="modal-head">
+          <h2 id="taste-modal-title">🧠 Your taste</h2>
+          <button type="button" class="modal-close" aria-label="Close" data-taste-close>×</button>
+        </header>
+        <div class="modal-body" id="taste-body">
+          <p class="muted">Loading…</p>
+        </div>
       </div>
     </dialog>
 

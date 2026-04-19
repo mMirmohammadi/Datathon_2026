@@ -1923,3 +1923,106 @@ code {
   margin-top: 4px;
   font-weight: 700;
 }
+
+/* ===== Taste / profile-summary modal ====================================== */
+
+#taste-modal {
+  max-width: 520px;
+  width: min(520px, 96vw);
+}
+
+#taste-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.taste-stats {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f1f4f9;
+  justify-content: space-around;
+}
+
+.taste-stats > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.taste-stats strong {
+  font-size: 20px;
+  color: #111;
+  line-height: 1;
+}
+
+.taste-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.taste-section h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #334;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.taste-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.taste-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: default;
+}
+
+.taste-chip.liked {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.taste-chip.avoided {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fca5a5;
+}
+
+.taste-price {
+  margin: 0;
+  font-size: 14px;
+  color: #223;
+}
+
+.taste-cold {
+  margin: 0;
+  font-size: 13px;
+  color: #334;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+.taste-caveat {
+  margin: 4px 0 0;
+  line-height: 1.5;
+}

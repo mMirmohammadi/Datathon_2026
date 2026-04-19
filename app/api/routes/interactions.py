@@ -21,10 +21,13 @@ from app.api.deps import get_current_user, get_users_db_path, require_csrf
 from app.auth.db import connect
 from app.config import Settings, get_settings
 from app.db import get_connection
+from app.memory.profile import build_profile
+from app.memory.summary import summarize_profile
 from app.models.schemas import (
     FavoriteListing,
     FavoritesResponse,
     InteractionRequest,
+    UserProfileSummary,
 )
 
 
@@ -260,6 +263,28 @@ def list_likes(
     with connect(users_db_path) as conn:
         rows = conn.execute(sql, (int(user["id"]),)).fetchall()
     return FavoritesResponse(favorites=_enrich_favorites(rows, settings.db_path))
+
+
+@router.get("/profile", response_model=UserProfileSummary)
+def get_profile_summary(
+    user: dict[str, Any] = Depends(get_current_user(required=True)),
+    users_db_path: Path = Depends(get_users_db_path),
+    settings: Settings = Depends(get_settings),
+) -> UserProfileSummary:
+    """Return a human-readable view of what the ranker has learned.
+
+    The UI consumes this to show the "Your taste" modal: tags for liked /
+    avoided features, a typical-price band, and simple activity counts.
+    Read-only; never mutates anything.
+    """
+    profile = build_profile(
+        user_id=int(user["id"]),
+        users_db_path=users_db_path,
+        listings_db_path=settings.db_path,
+    )
+    return UserProfileSummary.model_validate(
+        summarize_profile(profile, users_db_path)
+    )
 
 
 @router.get("/dismissed", response_model=list[str])

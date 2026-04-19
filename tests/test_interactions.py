@@ -231,6 +231,43 @@ def test_dismiss_records_negative(client: TestClient) -> None:
     assert favs == []
 
 
+def test_profile_endpoint_returns_summary_shape(client: TestClient) -> None:
+    """Logged-in callers get a full UserProfileSummary payload."""
+    tok = _register(client, "tasteep")
+    # Cold-start shape first.
+    r = client.get("/me/profile")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_cold_start"] is True
+    assert body["positive_count"] == 0
+    assert body["liked_features"] == []
+    assert body["avoided_features"] == []
+    assert body["price_range_chf"] is None
+    assert body["stats"] == {"likes": 0, "bookmarks": 0, "dismissals": 0}
+
+    # After 3 likes the cold-start gate should exit.
+    from app.config import get_settings
+    import sqlite3
+    with sqlite3.connect(get_settings().db_path) as db:
+        ids = [r[0] for r in db.execute("SELECT listing_id FROM listings LIMIT 3")]
+    for lid in ids:
+        client.post(
+            "/me/interactions",
+            json={"listing_id": lid, "kind": "like"},
+            headers={"X-CSRF-Token": tok},
+        )
+    r = client.get("/me/profile")
+    body = r.json()
+    assert body["is_cold_start"] is False
+    assert body["positive_count"] == 3
+    assert body["stats"]["likes"] == 3
+
+
+def test_profile_endpoint_requires_auth(client: TestClient) -> None:
+    r = client.get("/me/profile")
+    assert r.status_code == 401
+
+
 def test_dismissed_endpoint_reflects_latest_state(client: TestClient) -> None:
     """``GET /me/dismissed`` should return the id after dismiss, then drop it
     after undismiss."""

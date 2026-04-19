@@ -313,6 +313,53 @@ class InteractionRequest(BaseModel):
     )
 
 
+class FeatureTaste(BaseModel):
+    """One (feature-flag, signed-weight) pair on the learned taste vector.
+
+    ``weight`` lives in ``[-1, +1]`` with the sign convention "positive means
+    the user tends to prefer listings that have this feature".
+    """
+
+    key: str
+    label: str
+    weight: float
+
+
+class PriceRange(BaseModel):
+    """Approximate ±1σ CHF band derived from ``exp(log_price_mu ± sigma)``.
+
+    Indicative only; the ranker uses raw ``(mu, sigma)`` on the log scale,
+    not this rounded trio.
+    """
+
+    low_chf: int
+    mid_chf: int
+    high_chf: int
+
+
+class ProfileStats(BaseModel):
+    """Counts of distinct listings currently in each drawer.
+
+    ``likes`` matches ``/me/likes`` cardinality; ``bookmarks`` matches
+    ``/me/favorites`` cardinality; ``dismissals`` matches ``/me/dismissed``.
+    """
+
+    likes: int
+    bookmarks: int
+    dismissals: int
+
+
+class UserProfileSummary(BaseModel):
+    """Human-readable projection of the learned memory profile for the UI."""
+
+    is_cold_start: bool
+    positive_count: int
+    liked_features: list[FeatureTaste] = Field(default_factory=list)
+    avoided_features: list[FeatureTaste] = Field(default_factory=list)
+    price_range_chf: PriceRange | None = None
+    stats: ProfileStats
+
+
 class FavoriteListing(BaseModel):
     """One saved / liked entry, enriched with a compact listing summary so the
     UI can render a thumbnail row without a second round-trip.
