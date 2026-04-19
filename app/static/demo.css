@@ -435,6 +435,41 @@ code {
 
 .chip-ico { font-size: 14px; }
 
+/* Compact state: once the user scrolls past the hero label, the sticky
+ * search panel collapses the big title + example chips so it takes minimal
+ * vertical room without losing the input row. Toggled by demo.js via a
+ * `.scrolled` class; transitions are scoped tightly so no other state
+ * change animates by accident. `max-height: 320px` is a fixed upper bound
+ * chosen to exceed the natural content height so the collapse animates
+ * across its full 0→natural range at 0.24s. */
+.search-panel {
+  transition: padding 0.22s ease;
+}
+
+.search-label,
+.examples {
+  max-height: 320px;
+  overflow: hidden;
+  transition:
+    max-height 0.24s ease,
+    opacity 0.15s ease,
+    margin 0.24s ease;
+}
+
+.search-panel.scrolled {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.search-panel.scrolled .search-label,
+.search-panel.scrolled .examples {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  pointer-events: none;
+}
+
 /* =========================================================================
    "How does this work?" explainer (collapsed by default)
    ========================================================================= */
@@ -2189,3 +2224,135 @@ code {
 }
 
 .search-image-chip-clear:active { transform: scale(0.92); }
+
+/* ---------- Address + Google Maps link ---------------------------------- */
+
+.listing-address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 6px 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.listing-address .addr-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  color: var(--ink);
+}
+
+.listing-address.summary {
+  font-size: 12.5px;
+}
+
+.listing-address.detail {
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border-radius: 6px;
+  border-left: 2px solid var(--accent-2);
+}
+
+.maps-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #1a73e8 0%, #34a853 100%);
+  color: white;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: filter 0.15s, transform 0.1s;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.maps-link:hover {
+  filter: brightness(1.1);
+}
+
+.maps-link:active {
+  transform: scale(0.97);
+}
+
+.maps-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Shared interaction buttons (Love / Save / Hide) ---------------
+   One visual language across all 4 surfaces: main cards, detail modal,
+   similar-modal tiles, favorites drawer. Variants change size only —
+   states (liked/saved/dismissed) style identically across surfaces so the
+   same listing always feels visually the same to the user. */
+
+.listing-actions.variant-compact {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.listing-actions.variant-compact .listing-action {
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.12s, transform 0.08s;
+}
+
+.listing-actions.variant-compact .listing-action:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.listing-actions.variant-compact .listing-action:active {
+  transform: scale(0.94);
+}
+
+.listing-actions.variant-compact .listing-action.liked {
+  background: rgba(233, 70, 140, 0.18);
+  border-color: rgba(233, 70, 140, 0.45);
+}
+
+.listing-actions.variant-compact .listing-action.saved {
+  background: rgba(255, 198, 63, 0.18);
+  border-color: rgba(255, 198, 63, 0.45);
+}
+
+.listing-actions.variant-compact .listing-action.dismissed {
+  background: rgba(140, 140, 140, 0.18);
+  border-color: rgba(140, 140, 140, 0.45);
+}
+
+/* When the compact actions sit inside a similar-card tile, nudge them
+   below the cosine chip and give them a little top breathing room. */
+.similar-card .body .listing-actions {
+  margin-top: 8px;
+}
+
+/* Favorites drawer: the drawer row is clickable, but its action buttons
+   must not trigger the row click. We cover that in JS; here we just give
+   the action row a little top margin so the three buttons don't touch the
+   feature chips above. */
+.fav-card .listing-actions {
+  margin-top: 6px;
+}
+
+/* Detail modal: actions sit between the meta row and the address block.
+   Reuse the same "card" variant so buttons look identical to the main
+   search cards. */
+.listing-detail-modal .listing-actions.variant-card {
+  margin: 10px 0 4px 0;
+}

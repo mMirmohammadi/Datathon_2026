@@ -115,6 +115,122 @@ function esc(s) {
   }[c]));
 }
 
+// ---------- address + Google-Maps helpers (production-safety-critical) ------
+//
+// Every apartment in Switzerland has *some* subset of {street, house_number,
+// postal_code, city, canton, latitude, longitude}. Real coverage in our DB:
+// street ≈ 47 %, house_number ≈ 40 %, postal_code ≈ 56 %, latitude/longitude
+// ≈ 94 %. These helpers produce a display string and a deep-link URL that
+// degrade gracefully against any of those fields being null/empty.
+//
+// Security: user-sourced strings (street, city, etc.) flow through two
+// escape layers before hitting the DOM — `esc()` for HTML context, and
+// `encodeURIComponent()` for URL context. Never splice raw values into an
+// href attribute. Always use rel="noopener noreferrer" + target="_blank"
+// when opening an external link (reverse-tabnabbing mitigation).
+
+// Finite-coord sanity: reject NaN/Infinity, the null island (0,0), and
+// anything outside the Switzerland bounding box with a small margin. Outside
+// that, the coordinate is almost certainly wrong and we should prefer the
+// address string so the user doesn't land on open ocean.
+function _hasValidCoords(L) {
+  if (!L) return false;
+  const lat = L.latitude;
+  const lng = L.longitude;
+  if (typeof lat !== "number" || typeof lng !== "number") return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat === 0 && lng === 0) return false;
+  if (lat < 45 || lat > 48) return false;
+  if (lng < 5 || lng > 11) return false;
+  return true;
+}
+
+// Build the display address string. Empty when nothing useful — callers
+// should check truthiness before rendering a row.
+//
+// Two data-shape quirks we defend against:
+//   1. In every row of our DB where both ``street`` and ``house_number`` are
+//      present, the street field ALREADY ends with the number
+//      (e.g. street="Herisauerstrasse 15", house_number="15"). Blindly
+//      concatenating duplicates the number. Detect + skip the dupe.
+//   2. A lone ``house_number`` without a street name is meaningless to a
+//      reader ("5, Bern" is worse than just "Bern"), so only include the
+//      number when a street is present.
+function formatAddress(L) {
+  if (!L) return "";
+  const street = L.street == null ? "" : String(L.street).trim();
+  const number = L.house_number == null ? "" : String(L.house_number).trim();
+  let line1 = "";
+  if (street) {
+    // Use word-boundary check: matches "Strasse 15" but not "15 Strasse 15".
+    const alreadySuffixed =
+      number && new RegExp(`(^|\\s)${number.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(street);
+    line1 = alreadySuffixed ? street : [street, number].filter(Boolean).join(" ");
+  }
+  const line2 = [L.postal_code, L.city]
+    .map((s) => (s == null ? "" : String(s).trim()))
+    .filter(Boolean)
+    .join(" ");
+  const canton = L.canton ? String(L.canton).trim() : "";
+  return [line1, line2, canton].filter(Boolean).join(", ");
+}
+
+// Google Maps deep link, or null when nothing is linkable. Coordinates
+// preferred (93.6 % coverage, exact, multilingual-proof). Address fallback
+// includes "Switzerland" so the geocoder doesn't resolve to e.g. a
+// Bahnhofstrasse in Germany.
+function googleMapsUrl(L) {
+  if (!L) return null;
+  if (_hasValidCoords(L)) {
+    const lat = L.latitude.toFixed(6);
+    const lng = L.longitude.toFixed(6);
+    return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  }
+  const parts = [L.street, L.house_number, L.postal_code, L.city, L.canton, "Switzerland"]
+    .map((s) => (s == null ? "" : String(s).trim()))
+    .filter(Boolean);
+  // "Switzerland" alone is not a listing; refuse a URL that would just drop
+  // the user on the country border.
+  if (parts.length <= 1) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts.join(" "))}`;
+}
+
+// Render the address block (text + optional Maps pill). Empty string when
+// we have neither a formatted address nor a URL.
+function renderAddressBlock(L, { cls = "listing-address" } = {}) {
+  const addr = formatAddress(L);
+  const url = googleMapsUrl(L);
+  if (!addr && !url) return "";
+  const addrPart = addr
+    ? `<span class="addr-text" title="${esc(addr)}">📫 ${esc(addr)}</span>`
+    : "";
+  const mapsPart = url
+    ? `<a class="maps-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="Open in Google Maps">📍 Google Maps</a>`
+    : "";
+  return `<div class="${esc(cls)}">${addrPart}${mapsPart}</div>`;
+}
+
+// Decide whether a result batch should render with rank-score badges (#1 TOP
+// 0.123), or without (random / anon-default feed).
+//
+// True when any of:
+//   * backend flagged it as an unpersonalized default feed, OR
+//   * every listing's score is 0 / null (no channel fired)
+//
+// False as soon as one listing has a non-zero score — that means at least
+// one ranking channel (BM25 / visual / semantic / soft / memory) fired and
+// the ordering is meaningful.
+//
+// Extracted into a named helper so we can unit-test it independently of the
+// DOM-heavy renderListings pipeline.
+function isUnscoredBatch(listings, meta) {
+  if (meta && meta.default_feed && !meta.personalized) return true;
+  if (!Array.isArray(listings) || listings.length === 0) return true;
+  return listings.every(
+    (r) => !r || r.score == null || r.score === 0,
+  );
+}
+
 // Pass-2b display helpers. All 4 fields are tri-state (true / false / null for
 // UNKNOWN). Renders one chip per field that has a known value; empty string
 // when UNKNOWN, so the chip row collapses cleanly for listings whose extractor
@@ -214,15 +330,15 @@ function renderHardFilters(plan) {
     return;
   }
 
-  // Every row: label + value or '—' (null/empty). Never hide nulls — the user
-  // wants to see exactly what the LLM did and didn't emit.
+  // Hide rows the LLM didn't emit so the panel only shows what's actually
+  // constraining the search. The raw response is still available in the
+  // "For developers" panel for users who want to see every schema field.
   const rows = [];
   const add = (k, v) => {
-    const isNull = v == null || (Array.isArray(v) && v.length === 0);
+    if (v == null || (Array.isArray(v) && v.length === 0)) return;
     rows.push(
-      `<div class="kv"><span class="k">${esc(k)}</span><span class="v ${
-        isNull ? "null" : ""
-      }">${isNull ? "—" : esc(v)}</span></div>`,
+      `<div class="kv"><span class="k">${esc(k)}</span>` +
+      `<span class="v">${esc(v)}</span></div>`,
     );
   };
 
@@ -291,31 +407,31 @@ function renderHardFilters(plan) {
   const featuresExcluded = plan.features_excluded || [];
   const keywords = plan.bm25_keywords || [];
 
-  html += `
-    <div class="kv"><span class="k">features (required)</span><span class="v">${
-      features.length ? "" : "—"
-    }</span></div>
-    <div>${
-      features
-        .map((f) => `<span class="tag hard">${esc(f)}</span>`)
-        .join("") || ""
-    }</div>
-    <div class="kv" style="margin-top:6px"><span class="k">features_excluded</span><span class="v">${
-      featuresExcluded.length ? "" : "—"
-    }</span></div>
-    <div>${
-      featuresExcluded
-        .map((f) => `<span class="tag hard">¬ ${esc(f)}</span>`)
-        .join("") || ""
-    }</div>
-    <div class="kv" style="margin-top:6px"><span class="k">bm25_keywords</span><span class="v">${
-      keywords.length ? "" : "—"
-    }</span></div>
-    <div>${
-      keywords
-        .map((k) => `<span class="tag hard" title="Passed to FTS5 MATCH">${esc(k)}</span>`)
-        .join("") || ""
-    }</div>`;
+  if (features.length) {
+    html += `
+    <div class="kv"><span class="k">features (required)</span><span class="v"></span></div>
+    <div>${features
+      .map((f) => `<span class="tag hard">${esc(f)}</span>`)
+      .join("")}</div>`;
+  }
+  if (featuresExcluded.length) {
+    html += `
+    <div class="kv" style="margin-top:6px"><span class="k">features_excluded</span><span class="v"></span></div>
+    <div>${featuresExcluded
+      .map((f) => `<span class="tag hard">¬ ${esc(f)}</span>`)
+      .join("")}</div>`;
+  }
+  if (keywords.length) {
+    html += `
+    <div class="kv" style="margin-top:6px"><span class="k">bm25_keywords</span><span class="v"></span></div>
+    <div>${keywords
+      .map((k) => `<span class="tag hard" title="Passed to FTS5 MATCH">${esc(k)}</span>`)
+      .join("")}</div>`;
+  }
+
+  if (!html) {
+    html = '<p class="empty">No hard constraints extracted — ranking is driven entirely by your nice-to-haves.</p>';
+  }
 
   els.hardView.innerHTML = html;
 }
@@ -798,6 +914,10 @@ function renderListings(listings, meta) {
     meta.pipeline || null,
   );
 
+  // Batch-level "is this an unranked random selection?" decision.
+  // See `isUnscoredBatch` for the rule and rationale.
+  const unscored = isUnscoredBatch(listings, meta);
+
   dwellTracker.reset();
 
   listings.forEach((res, idx) => {
@@ -805,7 +925,9 @@ function renderListings(listings, meta) {
     const images = [listing.hero_image_url, ...(listing.image_urls || [])]
       .filter(Boolean)
       .filter((v, i, a) => a.indexOf(v) === i);
-    const isTop = idx === 0;
+    // "TOP" + gold border only make sense when the ranking is real.
+    // Suppress both on an unscored (random / anon default) feed.
+    const isTop = !unscored && idx === 0;
     const listingId = String(res.listing_id);
     const isLiked = authState.likedIds.has(listingId);
     const isBookmarked = authState.bookmarkedIds.has(listingId);
@@ -840,52 +962,26 @@ function renderListings(listings, meta) {
         <div class="listing-body">
           <div class="listing-head">
             <h3 class="listing-title">${esc(listing.title || "(no title)")}</h3>
-            <div class="rank-score">
+            ${
+              unscored
+                ? ""
+                : `<div class="rank-score">
               <div class="rank ${isTop ? "top" : ""}">#${idx + 1}${
-                isTop ? '<span class="rank-badge-top">TOP</span>' : ""
-              }</div>
+                    isTop ? '<span class="rank-badge-top">TOP</span>' : ""
+                  }</div>
               <div class="score" title="Final RRF score">${res.score.toFixed(
                 3,
               )}</div>
-            </div>
+            </div>`
+            }
           </div>
           ${
             authState.user || memBoost
-              ? `<div class="listing-actions">
-            ${
-              authState.user
-                ? `<button type="button" class="listing-action like-btn${
-                    isLiked ? " liked" : ""
-                  }" aria-pressed="${isLiked}" data-action="like"
-                    title="${
-                      isLiked
-                        ? "Tap to un-love it (we'll stop looking for similar homes)"
-                        : "I love this one! (we'll show you more like it)"
-                    }">${isLiked ? "💖 Loved" : "♡ Love"}</button>
-            <button type="button" class="listing-action save-btn${
-              isBookmarked ? " saved" : ""
-            }" aria-pressed="${isBookmarked}" data-action="save"
-                    title="${
-                      isBookmarked
-                        ? "Take it off your favorites"
-                        : "Save it to your favorites (we'll show more like it)"
-                    }">${isBookmarked ? "⭐ Saved" : "☆ Save"}</button>
-            <button type="button" class="listing-action dismiss-btn${
-              isDismissed ? " dismissed" : ""
-            }" aria-pressed="${isDismissed}" data-action="dismiss"
-                    title="${
-                      isDismissed
-                        ? "Bring it back"
-                        : "Hide this home (we won't show it again)"
-                    }">${isDismissed ? "↩️ Bring back" : "🙈 Hide"}</button>`
-                : ""
-            }
-            ${
-              memBoost
-                ? `<div class="memory-badge" title="We picked this one because it fits your taste">✨ picked for you</div>`
-                : ""
-            }
-          </div>`
+              ? `${renderListingActions(listingId, { variant: "card" })}${
+                  memBoost
+                    ? `<div class="memory-badge" title="We picked this one because it fits your taste">✨ picked for you</div>`
+                    : ""
+                }`
               : ""
           }
           <div class="listing-meta">
@@ -905,6 +1001,7 @@ function renderListings(listings, meta) {
                 : ""
             }
           </div>
+          ${renderAddressBlock(listing, { cls: "listing-address summary" })}
           ${
             listing.description
               ? `<div class="listing-desc">${sanitizeDescriptionHtml(listing.description)}</div>`
@@ -962,27 +1059,7 @@ function renderListings(listings, meta) {
     );
 
     // Like / save / dismiss buttons never expand the card.
-    const likeBtn = card.querySelector('[data-action="like"]');
-    const saveBtn = card.querySelector('[data-action="save"]');
-    const dismissBtn = card.querySelector('[data-action="dismiss"]');
-    if (likeBtn) {
-      likeBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        toggleLike(listingId, likeBtn);
-      });
-    }
-    if (saveBtn) {
-      saveBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        toggleBookmark(listingId, saveBtn);
-      });
-    }
-    if (dismissBtn) {
-      dismissBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        toggleDismiss(listingId, dismissBtn, card);
-      });
-    }
+    wireListingActions(card, { cardEl: card });
 
     // expand/collapse wiring — detail panel is lazily mounted on first open
     const toggle = () => {
@@ -1156,7 +1233,18 @@ function closeAuthModal() {
 function setAuthMode(mode) {
   const showField = (name, on) => {
     const el = els.authModal.querySelector(`[data-auth-field="${name}"]`);
-    if (el) el.hidden = !on;
+    if (!el) return;
+    el.hidden = !on;
+    // Disable inputs inside hidden wrappers so their `required` attribute
+    // doesn't block form submission in the other modes. Browsers run HTML5
+    // constraint validation on every non-disabled control regardless of
+    // whether an ancestor is `hidden`, and the resulting "please fill in
+    // this field" tooltip can't anchor to a hidden input — so the form just
+    // fails to submit with no visible feedback. Toggling `disabled` pulls
+    // the control out of validation AND out of the submitted form data.
+    el.querySelectorAll("input").forEach((inp) => {
+      inp.disabled = !on;
+    });
   };
   // Reset everything then selectively show.
   ["username", "email", "password", "new-password", "password-hint", "account-actions"].forEach(
@@ -1497,6 +1585,111 @@ function renderLikeButton(buttonEl, liked) {
   buttonEl.textContent = liked ? "💖 Loved" : "♡ Love";
 }
 
+// ---------- shared interaction-button helpers ------------------------------
+//
+// Every listing presented in the UI (main cards, detail modal, look-alike
+// tiles, favorites drawer) should expose the same three interaction controls
+// to a logged-in user: Love, Save, Hide. Anonymous users see nothing.
+// Rendering + wiring were previously inlined only in `renderListings`; this
+// helper pair consolidates both so every render surface stays in lock-step.
+//
+// Visual variants:
+//   card     full pill buttons with text + icon (used on the main result
+//            cards and in the detail modal header; action is the primary
+//            secondary action of the surface)
+//   compact  icon-only pills, 28 px tall (used on tiles + drawer rows where
+//            real estate is tight)
+//
+// Safety: `stopPropagation()` on every click prevents the button from
+// triggering the surface's own click handler (card expand, modal open).
+// Wiring is idempotent (marker via a WeakSet) so calling it twice on the
+// same DOM subtree never double-binds.
+
+const _wiredActionContainers = new WeakSet();
+
+function renderListingActions(listingId, { variant = "card" } = {}) {
+  if (!authState || !authState.user) return "";
+  const id = String(listingId);
+  const isLiked = authState.likedIds.has(id);
+  const isBookmarked = authState.bookmarkedIds.has(id);
+  const isDismissed = authState.dismissedIds.has(id);
+  const compact = variant === "compact";
+
+  const btn = (action, state, labelOn, labelOff, titleOn, titleOff, iconOn, iconOff) => {
+    const active = !!state;
+    const classActive =
+      action === "like" ? " liked"
+      : action === "save" ? " saved"
+      : action === "dismiss" ? " dismissed"
+      : "";
+    const body = compact
+      ? (active ? iconOn : iconOff)
+      : (active ? `${iconOn} ${labelOn}` : `${iconOff} ${labelOff}`);
+    return `<button type="button" class="listing-action ${action}-btn${active ? classActive : ""}"
+              aria-pressed="${active}" data-action="${action}"
+              title="${esc(active ? titleOn : titleOff)}">${body}</button>`;
+  };
+
+  const love = btn(
+    "like", isLiked,
+    "Loved", "Love",
+    "Tap to un-love it (we'll stop looking for similar homes)",
+    "I love this one! (we'll show you more like it)",
+    "💖", "♡",
+  );
+  const save = btn(
+    "save", isBookmarked,
+    "Saved", "Save",
+    "Take it off your favorites",
+    "Save it to your favorites (we'll show more like it)",
+    "⭐", "☆",
+  );
+  const hide = btn(
+    "dismiss", isDismissed,
+    "Bring back", "Hide",
+    "Bring it back",
+    "Hide this home (we won't show it again)",
+    "↩️", "🙈",
+  );
+
+  return `<div class="listing-actions variant-${variant}" data-listing-id="${esc(id)}">
+    ${love}${save}${hide}
+  </div>`;
+}
+
+function wireListingActions(root, { cardEl = null, onDismissed = null } = {}) {
+  if (!root) return;
+  root.querySelectorAll(".listing-actions").forEach((box) => {
+    if (_wiredActionContainers.has(box)) return;
+    _wiredActionContainers.add(box);
+    const listingId = box.dataset.listingId;
+    if (!listingId) return;
+    const card = cardEl ?? box.closest(".listing-card");
+    const likeBtn = box.querySelector('[data-action="like"]');
+    const saveBtn = box.querySelector('[data-action="save"]');
+    const dismissBtn = box.querySelector('[data-action="dismiss"]');
+    if (likeBtn) {
+      likeBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleLike(listingId, likeBtn);
+      });
+    }
+    if (saveBtn) {
+      saveBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleBookmark(listingId, saveBtn);
+      });
+    }
+    if (dismissBtn) {
+      dismissBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleDismiss(listingId, dismissBtn, card);
+        if (onDismissed) onDismissed(listingId);
+      });
+    }
+  });
+}
+
 function renderBookmarkButton(buttonEl, saved) {
   if (!buttonEl) return;
   buttonEl.classList.toggle("saved", !!saved);
@@ -1518,10 +1711,17 @@ async function openFavorites() {
       '<p class="empty-state"><span class="empty-ico">💭</span>No saved homes yet. Tap <b>⭐ Save</b> on any card to add it here.</p>';
   } else {
     host.innerHTML = favs.map(renderFavoriteRow).join("");
+    // Wire the inline Love / Save / Hide buttons on each row. Must fire
+    // BEFORE the delegated "click row → open detail" below, because the
+    // action buttons call stopPropagation() — relying on DOM ordering would
+    // be fragile. Wiring is idempotent (WeakSet marker).
+    wireListingActions(host);
     // Wire click → detail modal. Using event delegation on the list host
     // means we don't pay an addEventListener per card (matters if the
     // drawer ever holds hundreds of bookmarks).
     host.onclick = (ev) => {
+      // Let the action buttons' own stopPropagation take effect first.
+      if (ev.target.closest(".listing-actions")) return;
       const card = ev.target.closest(".fav-card");
       if (!card) return;
       const lid = card.dataset.listingId;
@@ -1575,6 +1775,7 @@ function renderFavoriteRow(f) {
                 .join("")}</div>`
             : ""
         }
+        ${renderListingActions(f.listing_id, { variant: "compact" })}
         <div class="fav-footer muted small">
           Saved ${esc(f.saved_at.slice(0, 10))} · <kbd>${esc(f.listing_id)}</kbd>
         </div>
@@ -1599,11 +1800,19 @@ async function openListingDetail(listingId) {
   // instant; we fill in the real content when the fetch resolves.
   els.detailBody.innerHTML = '<p class="muted">Loading…</p>';
   els.detailTitle.textContent = "Listing";
-  if (typeof els.detailModal.showModal === "function") {
-    els.detailModal.showModal();
-  } else {
-    els.detailModal.setAttribute("open", "");
+  // `showModal()` throws InvalidStateError on an already-open <dialog>, which
+  // is exactly what happens if another flow (e.g. clicking a similar-card
+  // from the look-alike grid) re-enters here while the detail modal is still
+  // open. Re-render in place in that case. Also reset the body scroll so the
+  // user doesn't land mid-way through the previous listing's description.
+  if (!els.detailModal.open) {
+    if (typeof els.detailModal.showModal === "function") {
+      els.detailModal.showModal();
+    } else {
+      els.detailModal.setAttribute("open", "");
+    }
   }
+  if (els.detailBody) els.detailBody.scrollTop = 0;
 
   let data;
   try {
@@ -1694,22 +1903,43 @@ async function openSimilarModal(listingId, sourceTitle) {
   const cards = results.map((r) => {
     const L = r.listing || {};
     const img = L.hero_image_url || (L.image_urls || [])[0] || "";
+    // `cosine` is now the raw DINOv2 cosine in [-1, 1]. A positive value gets
+    // rendered as "match X%"; 0.0 (result outside the image index) is hidden
+    // so we never show a misleading "match 0%".
+    const cos = typeof r.cosine === "number" ? r.cosine : 0;
+    const cosineChip = cos > 0
+      ? `<div class="cosine">match ${(cos * 100).toFixed(0)}%</div>`
+      : "";
     return `<div class="similar-card" data-listing-id="${esc(r.listing_id)}">
       ${img ? `<img src="${esc(img)}" alt="${esc(L.title || "")}" loading="lazy" />` : ""}
       <div class="body">
         <div class="title">${esc(L.title || r.listing_id)}</div>
         <div class="meta">${esc(chf(L.price_chf))} · ${esc(L.rooms ?? "?")} rooms · ${esc(L.city || "")}</div>
-        <div class="cosine">match ${(r.cosine * 100).toFixed(0)}%</div>
+        ${cosineChip}
+        ${renderListingActions(r.listing_id, { variant: "compact" })}
       </div>
     </div>`;
   }).join("");
 
   els.similarBody.innerHTML = metaLine + `<div class="similar-list">${cards}</div>`;
 
+  // Wire the interaction buttons on each tile FIRST so their click handlers
+  // call stopPropagation() before the tile's own click (which would close the
+  // modal and open the detail view).
+  wireListingActions(els.similarBody);
+
   els.similarBody.querySelectorAll(".similar-card").forEach((node) => {
     node.addEventListener("click", () => {
       const otherId = node.dataset.listingId;
-      if (otherId) openListingDetail(otherId);
+      if (!otherId) return;
+      // Close the look-alike modal before navigating into the result so the
+      // detail dialog sits at the top of the dialog stack (not buried behind
+      // the similar-results grid, which locks scroll + pointer events to
+      // the back layer). See openListingDetail for the matching guard that
+      // lets the detail modal be re-rendered in place without throwing
+      // InvalidStateError on `.showModal()`.
+      closeSimilarModal();
+      openListingDetail(otherId);
     });
   });
 }
@@ -1884,13 +2114,7 @@ function renderListingDetail(L) {
   const images = [L.hero_image_url, ...(L.image_urls || [])]
     .filter(Boolean)
     .filter((v, i, a) => a.indexOf(v) === i);
-  const place = [
-    L.street,
-    [L.postal_code, L.city].filter(Boolean).join(" "),
-    L.canton,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const addressBlock = renderAddressBlock(L, { cls: "listing-address detail" });
   const metaParts = [
     L.price_chf != null ? `<strong>${chf(L.price_chf)}</strong>` : "",
     L.rooms != null ? `${esc(L.rooms)} rooms` : "",
@@ -1917,7 +2141,8 @@ function renderListingDetail(L) {
       }
     </div>
     <div class="detail-meta">${metaParts.join(" · ")}</div>
-    ${place ? `<div class="detail-place muted">${esc(place)}</div>` : ""}
+    ${renderListingActions(L.id, { variant: "card" })}
+    ${addressBlock}
     ${
       (L.features || []).length
         ? `<div class="detail-features">${L.features
@@ -1959,6 +2184,12 @@ function renderListingDetail(L) {
     els.detailBody.querySelector(".img-nav.next")
       .addEventListener("click", () => go(1));
   }
+
+  // Wire the Love / Save / Hide buttons in the modal. No cardEl — this
+  // surface has no sibling card to dim, so toggleDismiss just updates the
+  // button state + server interaction. Modal stays open either way; the
+  // user closes it explicitly with × or the backdrop.
+  wireListingActions(els.detailBody);
 }
 
 async function clearHistory() {
@@ -2034,6 +2265,52 @@ const dwellTracker = {
 };
 
 // ---------- data flow --------------------------------------------------------
+
+// Homepage feed shown before the user searches. Pulls a small batch from
+// `/listings/default`, which is cheap (no LLM, no BM25/visual/text-embed)
+// and is personalised server-side when the caller is authenticated + past
+// cold-start. We render via `renderListings` and then override the status
+// banner it writes — the "Found N homes out of ? that passed your
+// must-haves" copy doesn't make sense when no must-haves were applied.
+async function loadDefaultFeed() {
+  // Don't clobber an existing result set (user could have searched very
+  // quickly before auth hydration finished).
+  if (els.listings.children.length > 0) return;
+
+  let data;
+  try {
+    const r = await fetch("/listings/default?limit=12", {
+      credentials: "same-origin",
+    });
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (e) {
+    console.warn("default feed load failed", e);
+    return;
+  }
+
+  const listings = data.listings || [];
+  if (!listings.length) return;
+
+  // Keep the query-plan meta panel hidden — there is no "what we
+  // understood" to show for a no-query default feed.
+  els.metaPanel.hidden = true;
+
+  renderListings(listings, data.meta || {});
+
+  const personalized = !!(data.meta && data.meta.personalized);
+  const authed = !!(authState && authState.user);
+  const n = listings.length;
+  const plural = n === 1 ? "" : "s";
+  const headline = personalized
+    ? `<b>Recommended for you</b> \u00b7 ${n} home${plural} picked from what you've liked, saved, or hidden.`
+    : authed
+    ? `<b>Start here</b> \u00b7 ${n} home${plural}. <span class="muted small">Like or save a few, then come back \u2014 we'll tune this to your taste.</span>`
+    : `<b>Start here</b> \u00b7 ${n} home${plural}. <span class="muted small">Sign in to get picks based on your taste.</span>`;
+  els.resultStatus.innerHTML = headline;
+
+  setStatus(personalized ? "Picks for you" : "Ready", "ok");
+}
 
 async function runQuery(query, limit) {
   setStatus("Thinking…", "loading");
@@ -2213,8 +2490,29 @@ if (els.favoritesList) {
   });
 }
 
-hydrateAuthState().catch((e) => {
-  console.warn("auth hydrate failed", e);
-});
+hydrateAuthState()
+  .catch((e) => { console.warn("auth hydrate failed", e); })
+  .finally(() => { loadDefaultFeed().catch(() => {}); });
+
+// Compact the sticky search panel once the user has scrolled past the hero
+// label. A single rAF-throttled `scroll` listener toggles `.scrolled`; the
+// collapse animation itself is CSS. Threshold (~72px) is the height of the
+// big label so the transition kicks in just as it would scroll off anyway.
+(function initCompactSearchBar() {
+  const panel = document.querySelector(".search-panel");
+  if (!panel) return;
+  const THRESHOLD = 72;
+  let pending = false;
+  const update = () => {
+    pending = false;
+    panel.classList.toggle("scrolled", window.scrollY > THRESHOLD);
+  };
+  window.addEventListener("scroll", () => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(update);
+  }, { passive: true });
+  update();
+})();
 
 setStatus("Ready", "ok");

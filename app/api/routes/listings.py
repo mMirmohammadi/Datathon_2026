@@ -17,7 +17,7 @@ from app.core.dinov2_search import (
 )
 from app.core.hard_filters import _parse_row
 from app.db import get_connection
-from app.harness.search_service import query_from_filters, query_from_text
+from app.harness.search_service import default_feed, query_from_filters, query_from_text
 from app.models.schemas import (
     HealthResponse,
     ImageSearchResponse,
@@ -36,6 +36,28 @@ router = APIRouter()
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@router.get("/listings/default", response_model=ListingsResponse)
+def listings_default(
+    limit: int = 12,
+    user: dict[str, Any] | None = Depends(get_current_user(required=False)),
+) -> ListingsResponse:
+    """Homepage feed shown before the user has typed a query.
+
+    Personalised by the memory channel when the caller is authenticated and
+    past cold-start; anonymous callers and cold-start users see the natural
+    pool order. Cheap — no LLM call, no BM25/visual/text-embed run.
+    """
+    settings = get_settings()
+    user_id = int(user["id"]) if user is not None else None
+    lim = max(1, min(int(limit), 50))
+    return default_feed(
+        db_path=settings.db_path,
+        users_db_path=settings.users_db_path,
+        limit=lim,
+        user_id=user_id,
+    )
 
 
 @router.post("/listings", response_model=ListingsResponse)
@@ -405,7 +427,7 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
             ),
         )
 
-    ranked, best_image_ids = find_similar_listings_fused(
+    ranked, best_image_ids, image_cosines = find_similar_listings_fused(
         listing_id=listing_id,
         platform_id=query_platform_id,
         db_path=settings.db_path,
@@ -440,16 +462,34 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
         for row in rows
     }
 
+    # Honour the SimilarListing.cosine schema contract (raw DINOv2 cosine in
+    # [-1, 1]). Previously we passed the fused RRF score, which is in the
+    # 0.01–0.05 range and renders as "3%" / "4%" in the UI regardless of how
+    # visually close the listings actually look. Ordering still comes from the
+    # fused score; only the displayed number changes.
+    n_with_cosine = 0
     results: list[SimilarListing] = []
-    for lid, fused_score in ranked:
+    for lid, _fused_score in ranked:
         ld = by_lid.get(str(lid))
         if ld is None:
             continue
+        visual_cosine = image_cosines.get(str(lid))
+        if visual_cosine is not None:
+            n_with_cosine += 1
         results.append(SimilarListing(
             listing_id=lid,
-            cosine=float(fused_score),
+            cosine=float(visual_cosine) if visual_cosine is not None else 0.0,
             listing=ld,
         ))
+
+    if results and n_with_cosine == 0:
+        print(
+            "[WARN] similar_listings.cosine_unavailable: "
+            f"expected=DINOv2 cosine per result for listing_id={listing_id}, "
+            f"got=0/{len(results)} results in the image index, "
+            "fallback=cosine=0.0 (UI hides the match% chip)",
+            flush=True,
+        )
 
     return SimilarListingsResponse(
         query_listing_id=listing_id,
@@ -460,8 +500,12 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
             "aggregation": "RRF(image, text, feature), k=60",
             "k_requested": k_clamped,
             "k_returned": len(results),
+            "cosine_coverage": n_with_cosine,
             "note": (
-                "'cosine' is the fused RRF score (not raw cosine) — higher is more similar."
+                "'cosine' is the max DINOv2 visual cosine (in [-1, 1]) between "
+                "the query listing and each result; ordering is the fused RRF "
+                "score over image + text + features. 0.0 means the result is "
+                "outside the image index."
             ),
         },
     )
