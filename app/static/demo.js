@@ -1252,7 +1252,18 @@ function closeAuthModal() {
 function setAuthMode(mode) {
   const showField = (name, on) => {
     const el = els.authModal.querySelector(`[data-auth-field="${name}"]`);
-    if (el) el.hidden = !on;
+    if (!el) return;
+    el.hidden = !on;
+    // Disable inputs inside hidden wrappers so their `required` attribute
+    // doesn't block form submission in the other modes. Browsers run HTML5
+    // constraint validation on every non-disabled control regardless of
+    // whether an ancestor is `hidden`, and the resulting "please fill in
+    // this field" tooltip can't anchor to a hidden input — so the form just
+    // fails to submit with no visible feedback. Toggling `disabled` pulls
+    // the control out of validation AND out of the submitted form data.
+    el.querySelectorAll("input").forEach((inp) => {
+      inp.disabled = !on;
+    });
   };
   // Reset everything then selectively show.
   ["username", "email", "password", "new-password", "password-hint", "account-actions"].forEach(
