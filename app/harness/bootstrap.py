@@ -76,7 +76,7 @@ def bootstrap_database(*, db_path: Path, raw_data_dir: Path) -> None:
         raise FileNotFoundError(
             f"Neither the teammate DB bundle nor the legacy CSV was found. "
             f"Expected one of: data/listings.db, "
-            f"datathon2026_dataset/listings.db.gz, {enriched_csv_path}."
+            f"datathon2026_dataset/data/listings.db, {enriched_csv_path}."
         )
 
     with get_connection(db_path) as connection:

@@ -1,6 +1,6 @@
 """End-to-end smoke: install + migrate the real teammate bundle from the repo.
 
-Runs against the actual ``datathon2026_dataset/listings.db.gz`` if present,
+Runs against the actual ``datathon2026_dataset/data/listings.db`` if present,
 drops the DB to a tmp path so we do not disturb the developer's local cache.
 No torch required.
 """
@@ -17,21 +17,22 @@ pytestmark = pytest.mark.smoke
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_DIR = REPO_ROOT / "datathon2026_dataset"
+BUNDLED_DB = BUNDLE_DIR / "data" / "listings.db"
 LANDMARKS = REPO_ROOT / "data" / "ranking" / "landmarks.json"
 
 
 @pytest.fixture(scope="module")
 def installed_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    if not (BUNDLE_DIR / "listings.db.gz").exists():
-        pytest.skip(f"bundle not available at {BUNDLE_DIR}")
+    if not BUNDLED_DB.exists():
+        pytest.skip(f"bundle not available at {BUNDLED_DB}")
     if not LANDMARKS.exists():
         pytest.skip(f"landmarks.json not available at {LANDMARKS}")
 
     work = tmp_path_factory.mktemp("dataset")
     target = work / "listings.db"
     bundle_copy = work / "datathon2026_dataset"
-    bundle_copy.mkdir()
-    shutil.copy2(BUNDLE_DIR / "listings.db.gz", bundle_copy / "listings.db.gz")
+    (bundle_copy / "data").mkdir(parents=True)
+    shutil.copy2(BUNDLED_DB, bundle_copy / "data" / "listings.db")
 
     from scripts.install_dataset import ensure_installed
     from scripts.migrate_db_to_app_schema import migrate

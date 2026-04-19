@@ -1,10 +1,11 @@
 """Install the teammate-built dataset bundle into the repo's ``data/`` tree.
 
 Idempotent:
-- Decompresses ``datathon2026_dataset/listings.db.gz`` to ``data/listings.db``
+- Copies ``datathon2026_dataset/data/listings.db`` to ``data/listings.db``
   if the destination is absent.
 - Copies ``embeddings.fp16.npy`` / ``embeddings_ids.json`` / ``landmarks.json``
-  from the bundle to ``data/ranking/`` when missing.
+  / ``landmarks_mined_candidates.json`` from ``datathon2026_dataset/data/ranking/``
+  to ``data/ranking/`` when missing.
 - Returns a dict describing what it did so callers can emit structured logs.
 
 Run directly (``python -m scripts.install_dataset``) to install on demand, or
@@ -12,7 +13,6 @@ import ``ensure_installed(db_path, ranking_dir)`` from the bootstrap.
 """
 from __future__ import annotations
 
-import gzip
 import shutil
 from pathlib import Path
 from typing import Any
@@ -23,13 +23,12 @@ BUNDLE_DIR = REPO_ROOT / "datathon2026_dataset"
 DEFAULT_DB_PATH = REPO_ROOT / "data" / "listings.db"
 DEFAULT_RANKING_DIR = REPO_ROOT / "data" / "ranking"
 
-_RANKING_FILES = ("embeddings.fp16.npy", "embeddings_ids.json", "landmarks.json")
-
-
-def _gunzip(src: Path, dst: Path) -> None:
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(src, "rb") as fin, dst.open("wb") as fout:
-        shutil.copyfileobj(fin, fout)
+_RANKING_FILES = (
+    "embeddings.fp16.npy",
+    "embeddings_ids.json",
+    "landmarks.json",
+    "landmarks_mined_candidates.json",
+)
 
 
 def ensure_installed(
@@ -48,27 +47,30 @@ def ensure_installed(
         "ranking_files_installed": [],
         "db_path": str(db_path),
     }
-    db_gz = bundle_dir / "listings.db.gz"
+    bundled_db = bundle_dir / "data" / "listings.db"
     if not db_path.exists():
-        if not db_gz.exists():
+        if not bundled_db.exists():
             raise FileNotFoundError(
-                f"install_dataset: neither {db_path} nor {db_gz} exists. "
-                "Place the dataset bundle at datathon2026_dataset/ or fall "
-                "back to the legacy CSV import."
+                f"install_dataset: neither {db_path} nor {bundled_db} exists. "
+                "Place the dataset bundle at datathon2026_dataset/ (repo-relative "
+                "layout: data/listings.db + data/ranking/*) or fall back to the "
+                "legacy CSV import."
             )
-        _gunzip(db_gz, db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(bundled_db, db_path)
         report["db_installed"] = True
         print(
-            f"[INFO] install_dataset: decompressed {db_gz} -> {db_path}",
+            f"[INFO] install_dataset: copied {bundled_db} -> {db_path}",
             flush=True,
         )
 
     ranking_dir.mkdir(parents=True, exist_ok=True)
+    bundled_ranking = bundle_dir / "data" / "ranking"
     for name in _RANKING_FILES:
         dst = ranking_dir / name
         if dst.exists():
             continue
-        src = bundle_dir / name
+        src = bundled_ranking / name
         if not src.exists():
             print(
                 f"[WARN] install_dataset: expected={src}, got=missing, "
