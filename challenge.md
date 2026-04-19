@@ -126,7 +126,35 @@ The dataset contains fields such as:
 - structured feature flags where available
 - image urls and a local image bundle
 
-You will also receive evaluation-style examples containing user queries, hard-criteria matches, and a soft ranking over 20 candidate listings.
+Evaluation style queries we may judge on (dont worry if you cant fulfill all, you can also either go deep or broad):
+
+- Ich suche eine 2,5-Zimmer-Wohnung in Zürich Kreis 4 oder 5, maximal 2’800 CHF, mit Balkon und Waschmaschine in der Wohnung. Wichtig sind mir eine moderne Küche und ein lebendiges, aber nicht zu lautes Quartier.
+- Ich möchte eine Wohnung in der Nähe meines Arbeitsplatzes in Zug, mit maximal 25 Minuten Pendelzeit mit dem ÖV, mindestens 65 m² und mindestens 2 Zimmern. Die Wohnung sollte hell, ruhig und gut geschnitten sein.
+- Wir sind eine Familie mit einem Kind und suchen in Winterthur eine Wohnung mit mindestens 3,5 Zimmern, ab 80 m² und Miete unter 3’200 CHF. Uns sind gute Schulen, eine kinderfreundliche Umgebung und viel Tageslicht wichtig.
+- Ich suche ein Studio oder 1,5-Zimmer-Apartment in Lausanne, maximal 1’900 CHF, möglichst möbliert und mit guter Anbindung an die EPFL. Es sollte modern, sauber und möglichst in Seenähe sein.
+- Ich suche eine 4-Zimmer-Wohnung in Basel, unter 3’500 CHF, mit mindestens 2 Badezimmern und Parkplatz. Schön wäre eine ruhige Wohnlage, grüne Umgebung und ein gepflegtes Gebäude.
+
+Some hints:
+
+ETH commute + lifestyle mix
+“Bright 2-room apartment within 20 minutes of ETH Zentrum by public transport, under CHF 2,200, ideally in a lively neighbourhood with cafés”
+→ Hard: rooms=2, price≤2200, commute constraint. Soft: bright, lively, café density. Tests transport enrichment (SBB/ZVV) + POI data.
+
+PhD-style long-term, quiet
+“Quiet 1.5-room flat near ETH Hönggerberg, furnished if possible, move-in March, max CHF 1,800”
+→ Hard: rooms=1.5, price≤1800, available~March, proximity to Hönggerberg campus. Soft: quiet, furnished. Tests geospatial radius around a specific campus + description parsing for “möbliert”.
+
+Classic family conflict query
+“Family-friendly 4.5-room apartment in a Zurich suburb with good S-Bahn connection to HB, garden or large balcony, near good schools, up to CHF 3,500”
+→ Hard: rooms≥4.5, price≤3500, Zurich commuter belt, outdoor space. Soft: “good schools”, “good connection”. Tests POI enrichment (schools) + commute time computation.
+
+Multimodal / image-heavy
+“Modern loft-style apartment in Zurich Kreis 4 or 5 with lots of natural light and a view, 3+ rooms, around CHF 2,800”
+→ Hard: Kreis 4/5, rooms≥3, price~2800. Soft: “modern”, “loft-style”, “natural light”, “view”. Forces image analysis — text alone won’t distinguish these well.
+
+Conflicting / tradeoff query
+“Cheap but central studio in Zurich, close to ETH and nightlife, doesn’t matter if small”
+→ Hard: studio/1 room, Zurich. Soft + conflicting: cheap vs. central vs. near ETH vs. nightlife. Tests how the system handles contradictions and explains its ranking tradeoffs — exactly the Strategy A/B/C pattern from slide 10.
 
 ## What You Need to Build
 
