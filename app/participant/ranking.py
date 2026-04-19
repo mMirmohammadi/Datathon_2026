@@ -63,6 +63,7 @@ def _to_breakdown(candidate: dict[str, Any]) -> RankingBreakdown:
 
     visual = candidate.get("visual_score")
     text_embed = candidate.get("text_embed_score")
+    dinov2_image = candidate.get("dinov2_image_score")
     soft_count = candidate.get("soft_signals_activated")
     memory_count = candidate.get("memory_rankings_activated")
     memory_score = candidate.get("memory_score")
@@ -77,6 +78,7 @@ def _to_breakdown(candidate: dict[str, Any]) -> RankingBreakdown:
         bm25_score=bm25_out,
         visual_score=float(visual) if visual is not None else None,
         text_embed_score=float(text_embed) if text_embed is not None else None,
+        dinov2_image_score=float(dinov2_image) if dinov2_image is not None else None,
         soft_signals_activated=int(soft_count) if isinstance(soft_count, int) else 0,
         memory_rankings_activated=int(memory_count) if isinstance(memory_count, int) else 0,
         memory_score=float(memory_score) if memory_score is not None else None,

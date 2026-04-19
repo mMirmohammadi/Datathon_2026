@@ -43,6 +43,8 @@ const els = {
   tasteBtn: document.getElementById("taste-btn"),
   tasteModal: document.getElementById("taste-modal"),
   tasteBody: document.getElementById("taste-body"),
+  searchImageInput: document.getElementById("search-image-input"),
+  searchImageChipClear: document.getElementById("search-image-chip-clear"),
 };
 
 // ---------- auth + interaction client state ---------------------------------
@@ -1726,6 +1728,64 @@ function renderTasteSummary(s) {
   els.tasteBody.innerHTML = body;
 }
 
+// ---------- Attach-a-photo (inline with the search bar) --------------------
+// The user can attach a photo to the main search. On submit, the /demo form
+// POSTs multipart to /listings/search/multi with both the text and the file;
+// the server adds a DINOv2 image-similarity ranking to the existing RRF
+// fusion so text + photo jointly drive the top-K.
+
+const _attachedImage = { file: null, previewUrl: null };
+
+function _attachedImageFile() {
+  return _attachedImage.file;
+}
+
+function _acceptAttachedImage(file) {
+  if (!file) return;
+  if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) {
+    setStatus(`Unsupported type ${file.type || "?"} — use JPEG, PNG or WEBP.`, "err");
+    return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    setStatus(`File is ${(file.size / (1024 * 1024)).toFixed(1)} MB; max is 8 MB.`, "err");
+    return;
+  }
+  _clearAttachedImage();
+  const url = URL.createObjectURL(file);
+  _attachedImage.file = file;
+  _attachedImage.previewUrl = url;
+  const chipWrap = document.getElementById("search-image-chip-wrap");
+  const thumb = document.getElementById("search-image-chip-thumb");
+  const nameEl = document.getElementById("search-image-chip-name");
+  const attachBtn = document.querySelector(".search-attach-btn");
+  if (thumb) thumb.src = url;
+  if (nameEl) {
+    const kb = Math.round(file.size / 1024);
+    nameEl.textContent = `${file.name} · ${kb} KB`;
+  }
+  if (chipWrap) chipWrap.hidden = false;
+  if (attachBtn) attachBtn.classList.add("has-image");
+  setStatus("Photo attached — the ranker will blend it with your text", "ok");
+}
+
+function _clearAttachedImage() {
+  if (_attachedImage.previewUrl) {
+    URL.revokeObjectURL(_attachedImage.previewUrl);
+  }
+  _attachedImage.file = null;
+  _attachedImage.previewUrl = null;
+  const chipWrap = document.getElementById("search-image-chip-wrap");
+  const thumb = document.getElementById("search-image-chip-thumb");
+  const nameEl = document.getElementById("search-image-chip-name");
+  const fileInput = document.getElementById("search-image-input");
+  const attachBtn = document.querySelector(".search-attach-btn");
+  if (chipWrap) chipWrap.hidden = true;
+  if (thumb) thumb.removeAttribute("src");
+  if (nameEl) nameEl.textContent = "—";
+  if (fileInput) fileInput.value = "";
+  if (attachBtn) attachBtn.classList.remove("has-image");
+}
+
 function renderListingDetail(L) {
   els.detailTitle.textContent = L.title || "(no title)";
   const images = [L.hero_image_url, ...(L.image_urls || [])]
@@ -1886,13 +1946,29 @@ async function runQuery(query, limit) {
 
   const personalize =
     !!(authState.user && els.personalizeToggle && els.personalizeToggle.checked);
+
+  // Always POST as multipart. The /listings/search/multi endpoint handles
+  // all three modes (text-only, image-only, text+image) — and when there's
+  // no file attached it falls through to the same ranker the JSON /listings
+  // endpoint uses, so nothing regresses for text-only queries.
+  const attachedFile = _attachedImageFile();
+  const fd = new FormData();
+  fd.append("query", query || "");
+  fd.append("limit", String(limit));
+  fd.append("offset", "0");
+  fd.append("personalize", personalize ? "true" : "false");
+  if (attachedFile) fd.append("file", attachedFile);
+
+  if (attachedFile) {
+    setStatus(query ? "Reading your photo + text…" : "Reading your photo…", "loading");
+  }
+
   let response;
   try {
-    response = await fetch("/listings", {
+    response = await fetch("/listings/search/multi", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      body: fd,
       credentials: "same-origin",
-      body: JSON.stringify({ query, limit, offset: 0, personalize }),
     });
   } catch (e) {
     setStatus("Can't reach the server", "err");
@@ -1943,7 +2019,12 @@ async function runQuery(query, limit) {
 els.form.addEventListener("submit", (ev) => {
   ev.preventDefault();
   const q = els.query.value.trim();
-  if (!q) return;
+  const hasImage = !!_attachedImageFile();
+  // Accept either a text query or a photo; the server needs at least one.
+  if (!q && !hasImage) {
+    setStatus("Type something or attach a photo first", "err");
+    return;
+  }
   const lim = parseInt(els.limit.value, 10) || 25;
   runQuery(q, lim);
 });
@@ -1975,6 +2056,16 @@ document.querySelectorAll("[data-similar-close]").forEach((btn) => {
 document.querySelectorAll("[data-taste-close]").forEach((btn) => {
   btn.addEventListener("click", closeTaste);
 });
+// Wire the inline attach-a-photo chip.
+if (els.searchImageInput) {
+  els.searchImageInput.addEventListener("change", (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    if (f) _acceptAttachedImage(f);
+  });
+}
+if (els.searchImageChipClear) {
+  els.searchImageChipClear.addEventListener("click", _clearAttachedImage);
+}
 
 if (els.authTabs) {
   els.authTabs.querySelectorAll(".tab").forEach((tab) => {

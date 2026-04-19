@@ -53,7 +53,10 @@ class HardFilters(BaseModel):
     object_category: list[str] | None = None
     bm25_keywords: list[str] | None = None
     soft_preferences: SoftPreferences | None = None
-    limit: int = Field(default=20, ge=1, le=500)
+    # Internal cap for the candidate pool passed into the RRF ranker. Bumped
+    # above the external API cap so image-only queries can consider the whole
+    # corpus when the hard-filter channel has nothing to narrow on.
+    limit: int = Field(default=20, ge=1, le=30000)
     offset: int = Field(default=0, ge=0)
     sort_by: Literal["price_asc", "price_desc", "rooms_asc", "rooms_desc"] | None = None
 
@@ -118,6 +121,9 @@ class RankingBreakdown(BaseModel):
     bm25_score: float | None = None
     visual_score: float | None = None
     text_embed_score: float | None = None
+    # DINOv2 channel only contributes when the caller uploaded a photo on
+    # /listings/search/multi. None for pure-text queries.
+    dinov2_image_score: float | None = None
     soft_signals_activated: int = 0
     memory_rankings_activated: int = 0
     memory_score: float | None = None
@@ -201,6 +207,16 @@ class SimilarListing(BaseModel):
 
 class SimilarListingsResponse(BaseModel):
     query_listing_id: str
+    results: list[SimilarListing]
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImageSearchResponse(BaseModel):
+    """Response for ``POST /listings/search/image`` — user uploads an arbitrary
+    photo (not an existing listing), and we return visually similar listings
+    ranked by max DINOv2 cosine per listing.
+    """
+
     results: list[SimilarListing]
     meta: dict[str, Any] = Field(default_factory=dict)
 

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import io
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from PIL import Image, UnidentifiedImageError
 
 from app.api.deps import get_current_user
 from app.config import get_settings
 from app.core.dinov2_search import (
     dinov2_enabled,
+    find_similar_by_image,
     find_similar_listings,
+    find_similar_listings_fused,
     is_loaded as dinov2_is_loaded,
 )
 from app.core.hard_filters import _parse_row
@@ -16,6 +20,7 @@ from app.db import get_connection
 from app.harness.search_service import query_from_filters, query_from_text
 from app.models.schemas import (
     HealthResponse,
+    ImageSearchResponse,
     ListingData,
     ListingsQueryRequest,
     ListingsResponse,
@@ -84,38 +89,149 @@ def listings_search(request: ListingsSearchRequest) -> ListingsResponse:
     )
 
 
-@router.get(
-    "/listings/{listing_id}/similar",
-    response_model=SimilarListingsResponse,
-)
-def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
-    """DINOv2 reverse-image search — find listings that LOOK LIKE this one.
+# 8 MB body cap (strategy_visual_reverse_search.md §3.4). Large enough for any
+# real phone-camera JPEG; small enough that a malicious upload can't OOM the
+# encoder. Enforced at the route boundary because starlette's UploadFile itself
+# streams to a spool file with no size check.
+_MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+# Hard cap on decoded pixel dimensions. Prevents the "PIL decompression bomb"
+# failure mode where a small compressed PNG expands to multi-gigapixel RGB.
+_MAX_IMAGE_PIXELS = 4096 * 4096
 
-    Runs the query listing's mean image embedding against the 70,548-row
-    DINOv2 main index (ViT-L/14 + GeM pooling, 1024-d L2-normalized).
-    Returns the top-K similar listings by max cosine, with their full
-    :class:`ListingData` for UI rendering.
+
+def _decode_uploaded_image(raw: bytes) -> Image.Image:
+    """Decode uploaded bytes → RGB PIL.Image; enforce size + pixel caps.
+
+    Raises HTTPException(400) with a user-visible detail on any decode
+    failure, oversize input, or decompression-bomb attempt. Used by both
+    the pure-image ``/listings/search/image`` route and the hybrid
+    ``/listings/search/multi`` route so caps are consistent.
+    """
+    if not raw:
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"upload is {len(raw)} bytes, max is {_MAX_UPLOAD_BYTES} "
+                "(8 MB); shrink the image and try again."
+            ),
+        )
+    try:
+        pil = Image.open(io.BytesIO(raw))
+        pil.load()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"could not decode image: {exc!s}",
+        ) from exc
+    if pil.size[0] * pil.size[1] > _MAX_IMAGE_PIXELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"decoded image is {pil.size[0]}x{pil.size[1]} pixels, max is "
+                f"{_MAX_IMAGE_PIXELS} total pixels (~4096x4096). "
+                "Downscale before uploading."
+            ),
+        )
+    if pil.mode != "RGB":
+        pil = pil.convert("RGB")
+    return pil
+
+
+@router.post("/listings/search/multi", response_model=ListingsResponse)
+async def listings_search_multi(
+    query: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+    limit: int = Form(default=25),
+    offset: int = Form(default=0),
+    personalize: bool = Form(default=True),
+    user: dict[str, Any] | None = Depends(get_current_user(required=False)),
+) -> ListingsResponse:
+    """Hybrid text + image search — one endpoint, three modes.
+
+    - **Text only** (``query`` set, no ``file``): identical to ``POST /listings``.
+    - **Image only** (``file`` set, empty ``query``): DINOv2 image channel dominates
+      the RRF; Arctic and BM25 contribute the neutral candidate order.
+    - **Text + image**: both channels feed the fusion — text drives hard filters +
+      BM25 + semantic; image adds a DINOv2 cosine ranking. The fusion combines
+      them so the top results satisfy both the language and the photo.
+
+    Multipart form so the frontend can attach a file with FormData; the JSON
+    ``POST /listings`` route stays untouched for non-UI callers.
+    """
+    q = (query or "").strip()
+    if not q and file is None:
+        raise HTTPException(
+            status_code=400,
+            detail="provide at least one of: query text, or an image file",
+        )
+
+    image_pil: Image.Image | None = None
+    if file is not None:
+        if not dinov2_enabled():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "image queries require the DINOv2 channel, which is disabled "
+                    "(set LISTINGS_DINOV2_ENABLED=1 and restart)."
+                ),
+            )
+        if not dinov2_is_loaded():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "DINOv2 index is not loaded. Check startup logs for [WARN] "
+                    "dinov2_*."
+                ),
+            )
+        raw = await file.read()
+        image_pil = _decode_uploaded_image(raw)
+
+    # Pure image query (no text): avoid the LLM hard-filter call (it would
+    # just return empty filters anyway), run the ranker over the full pool.
+    # Arctic's "query: " on an empty string is a no-op; BM25 without keywords
+    # returns the full candidate pool in natural order; the DINOv2 image
+    # channel then drives ranking via RRF.
+    effective_query = q if q else ""
+
+    settings = get_settings()
+    user_id = int(user["id"]) if user is not None else None
+    do_personalize = bool(personalize and user_id is not None)
+    return query_from_text(
+        db_path=settings.db_path,
+        query=effective_query,
+        limit=int(limit),
+        offset=int(offset),
+        user_id=user_id,
+        personalize=do_personalize,
+        users_db_path=settings.users_db_path,
+        image_pil=image_pil,
+    )
+
+
+@router.post(
+    "/listings/search/image",
+    response_model=ImageSearchResponse,
+)
+async def listings_search_image(
+    file: UploadFile = File(...),
+    k: int = 12,
+) -> ImageSearchResponse:
+    """Arbitrary-photo reverse search — upload a picture, get similar listings.
+
+    Pipeline: decode → DINOv2 ViT-L/14 eval transform → forward → GeM pool →
+    L2 → cosine against the 70,548 × 1024 main matrix → max-pool per listing
+    → top-K enriched with full :class:`ListingData`. Max-cosine aggregation is
+    the same rule the ``/listings/{id}/similar`` endpoint uses for
+    consistency.
 
     Disabled behaviours:
-      * 404 when the query listing doesn't exist in the listings table.
-      * 503 when the DINOv2 channel is off or not loaded.
-      * Empty result list when the listing has no images in the store.
+      * 400 when the upload is not a decodable image, empty, or oversize.
+      * 503 when the DINOv2 channel is off or the index is not loaded.
     """
     k_clamped = max(1, min(int(k), 50))
     settings = get_settings()
-
-    # Verify the query listing exists first so callers get a clean 404, not
-    # an opaque "no similar results" when the id is wrong.
-    with get_connection(settings.db_path) as conn:
-        hit = conn.execute(
-            "SELECT 1 FROM listings WHERE listing_id = ? LIMIT 1",
-            (listing_id,),
-        ).fetchone()
-    if hit is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"listing {listing_id!r} not found",
-        )
 
     if not dinov2_enabled():
         raise HTTPException(
@@ -134,36 +250,53 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
             ),
         )
 
-    # The DINOv2 store is keyed on image_id "<source>/<platform_id>/<idx-hash>",
-    # so find_similar_listings operates on platform_id-strings. We need BOTH
-    # sides of the translation:
-    #   1. Resolve the query listing's platform_id before calling the lookup.
-    #   2. Translate each returned platform_id back to a listing_id and enrich
-    #      with the full ListingData.
-    # For ROBINREAL, platform_id == listing_id (both are MongoDB ObjectIds);
-    # for COMPARIS they differ. Doing the platform_id round-trip handles both.
-    with get_connection(settings.db_path) as conn:
-        pid_row = conn.execute(
-            "SELECT platform_id FROM listings WHERE listing_id = ?",
-            (listing_id,),
-        ).fetchone()
-    query_platform_id = pid_row["platform_id"] if pid_row is not None else listing_id
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"upload is {len(raw)} bytes, max is {_MAX_UPLOAD_BYTES} "
+                "(8 MB); shrink the image and try again."
+            ),
+        )
+    try:
+        pil = Image.open(io.BytesIO(raw))
+        # Force decode now (Image.open is lazy) so a malformed file fails here
+        # rather than deep inside the encoder.
+        pil.load()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"could not decode image: {exc!s}",
+        ) from exc
+    if pil.size[0] * pil.size[1] > _MAX_IMAGE_PIXELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"decoded image is {pil.size[0]}x{pil.size[1]} pixels, max is "
+                f"{_MAX_IMAGE_PIXELS} total pixels (~4096x4096). "
+                "Downscale before uploading."
+            ),
+        )
+    # RGBA / palette / greyscale all need a composite to RGB before ImageNet
+    # normalisation; same rule the indexer's safe_open_image applies.
+    if pil.mode != "RGB":
+        pil = pil.convert("RGB")
 
-    similar = find_similar_listings(query_platform_id, k=k_clamped)
+    similar = find_similar_by_image(pil, k=k_clamped)
     if not similar:
-        return SimilarListingsResponse(
-            query_listing_id=listing_id,
+        return ImageSearchResponse(
             results=[],
             meta={
                 "model": "dinov2_vitl14_reg",
-                "note": (
-                    "Query listing has no images in the DINOv2 store "
-                    "(likely dropped during triage)."
-                ),
+                "k_requested": k_clamped,
+                "k_returned": 0,
+                "note": "encoder produced no cosine matches (empty corpus?)",
             },
         )
 
-    # Enrich with listing rows so the UI can render cards directly.
     similar_pids = [pid for pid, _ in similar]
     placeholders = ", ".join("?" for _ in similar_pids)
     with get_connection(settings.db_path) as conn:
@@ -191,8 +324,7 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
             listing=ld,
         ))
 
-    return SimilarListingsResponse(
-        query_listing_id=listing_id,
+    return ImageSearchResponse(
         results=results,
         meta={
             "model": "dinov2_vitl14_reg",
@@ -200,5 +332,161 @@ def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
             "aggregation": "max cosine per candidate listing",
             "k_requested": k_clamped,
             "k_returned": len(results),
+            "bytes": len(raw),
+            "decoded_size": f"{pil.size[0]}x{pil.size[1]}",
         },
     )
+
+
+@router.get(
+    "/listings/{listing_id}/similar",
+    response_model=SimilarListingsResponse,
+)
+def similar_listings(listing_id: str, k: int = 10) -> SimilarListingsResponse:
+    """Look-alike listings fused over image + text + feature channels.
+
+    - **Image**: DINOv2 centroid of the query listing's photos vs every other
+      listing's photos (max cosine per listing).
+    - **Text**: Arctic description embedding of the query listing vs every
+      other listing's description.
+    - **Feature**: SQL similarity on canton, object category, rooms, price.
+
+    Works even when the query listing has zero photos in the DINOv2 store —
+    the text + feature channels alone produce a useful ranking. Each
+    returned listing also has ``image_urls`` re-ordered so the photo that
+    best matches the query listing's centroid is first (UX alignment).
+
+    Disabled behaviours:
+      * 404 when the query listing doesn't exist in the listings table.
+      * 503 when the DINOv2 channel is off (image channel blocked) —
+        callers can still rely on the text + feature channels by removing
+        the guard in a future patch if that's a hard blocker.
+    """
+    k_clamped = max(1, min(int(k), 50))
+    settings = get_settings()
+
+    # Verify the query listing exists first so callers get a clean 404, not
+    # an opaque "no similar results" when the id is wrong.
+    with get_connection(settings.db_path) as conn:
+        hit = conn.execute(
+            "SELECT platform_id FROM listings WHERE listing_id = ? LIMIT 1",
+            (listing_id,),
+        ).fetchone()
+    if hit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"listing {listing_id!r} not found",
+        )
+    query_platform_id = hit["platform_id"] or listing_id
+
+    if not dinov2_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "DINOv2 reverse-image channel is disabled on this server "
+                "(set LISTINGS_DINOV2_ENABLED=1 and restart)."
+            ),
+        )
+    if not dinov2_is_loaded():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "DINOv2 index is not loaded. Check the server startup logs "
+                "for [WARN] dinov2_*."
+            ),
+        )
+
+    ranked, best_image_ids = find_similar_listings_fused(
+        listing_id=listing_id,
+        platform_id=query_platform_id,
+        db_path=settings.db_path,
+        k=k_clamped,
+    )
+    if not ranked:
+        return SimilarListingsResponse(
+            query_listing_id=listing_id,
+            results=[],
+            meta={
+                "model": "dinov2_vitl14_reg + arctic-embed-l-v2 + sql-features",
+                "note": (
+                    "No similar listings produced (all three channels were empty — "
+                    "check DINOv2 / Arctic indexes + listings table)."
+                ),
+            },
+        )
+
+    # Enrich with ListingData, keyed on listing_id this time (fused returns
+    # listing_ids directly, no platform_id round-trip needed).
+    similar_lids = [lid for lid, _ in ranked]
+    placeholders = ", ".join("?" for _ in similar_lids)
+    with get_connection(settings.db_path) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM listings WHERE listing_id IN ({placeholders})",
+            similar_lids,
+        ).fetchall()
+    by_lid: dict[str, Any] = {
+        str(row["listing_id"]): _to_listing_data(
+            _reorder_image_urls(_parse_row(dict(row)), best_image_ids.get(str(row["listing_id"])))
+        )
+        for row in rows
+    }
+
+    results: list[SimilarListing] = []
+    for lid, fused_score in ranked:
+        ld = by_lid.get(str(lid))
+        if ld is None:
+            continue
+        results.append(SimilarListing(
+            listing_id=lid,
+            cosine=float(fused_score),
+            listing=ld,
+        ))
+
+    return SimilarListingsResponse(
+        query_listing_id=listing_id,
+        results=results,
+        meta={
+            "model": "dinov2_vitl14_reg + arctic-embed-l-v2 + sql-features",
+            "embed_dim": 1024,
+            "aggregation": "RRF(image, text, feature), k=60",
+            "k_requested": k_clamped,
+            "k_returned": len(results),
+            "note": (
+                "'cosine' is the fused RRF score (not raw cosine) — higher is more similar."
+            ),
+        },
+    )
+
+
+def _reorder_image_urls(row: dict[str, Any], best_image_id: str | None) -> dict[str, Any]:
+    """Re-order ``row['image_urls']`` so the photo matching ``best_image_id``
+    is first. Mutates and returns the row for chaining. No-op if the id
+    doesn't match any URL (e.g. SRED montage image_ids, which don't map to
+    S3 filenames 1:1).
+
+    The DINOv2 ``image_id`` is shaped ``<source>/<platform_id>/<stem>``
+    where ``stem`` matches the last path segment of the S3 URL (minus
+    extension). Substring match on the stem handles .jpeg / .png / .webp
+    / .JPEG variants without a format-specific matcher.
+    """
+    if not best_image_id:
+        return row
+    urls = list(row.get("image_urls") or [])
+    if not urls:
+        return row
+    stem = best_image_id.rsplit("/", 1)[-1]
+    if not stem:
+        return row
+    # Find the URL whose path contains the image_id stem (no-extension match).
+    target_i = -1
+    for i, url in enumerate(urls):
+        if stem in str(url):
+            target_i = i
+            break
+    if target_i <= 0:
+        return row
+    match = urls.pop(target_i)
+    urls.insert(0, match)
+    row["image_urls"] = urls
+    row["hero_image_url"] = match
+    return row

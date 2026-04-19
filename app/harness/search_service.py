@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
+from app.core.dinov2_search import (
+    _STATE as _DINOV2_STATE,
+    dinov2_enabled,
+    is_loaded as dinov2_is_loaded,
+    score_candidates_for_image,
+)
 from app.core.hard_filters import HardFilterParams, search_listings
 from app.core.match_explain import build_match_detail
 from app.core.soft_signals import (
@@ -24,6 +30,9 @@ from app.core.visual_search import (
     score_candidates as visual_score_candidates,
     visual_enabled,
 )
+
+if TYPE_CHECKING:
+    from PIL.Image import Image as PILImage
 from app.memory.profile import UserProfile, build_profile
 from app.memory.rankings import MemorySignals, build_memory_rankings
 from app.models.schemas import HardFilters, ListingsResponse, SoftPreferences
@@ -34,6 +43,36 @@ from app.participant.soft_filtering import filter_soft_facts
 
 
 HYBRID_POOL = 300
+
+
+def _reorder_image_urls_inplace(candidate: dict[str, Any], best_image_id: str) -> None:
+    """Reorder ``candidate['image_urls']`` so the photo matching
+    ``best_image_id`` sits at index 0. Mutates in place. No-op when the id
+    doesn't match any URL (e.g. SRED montage image_ids that don't map 1:1
+    to S3 paths).
+
+    The DINOv2 ``image_id`` is shaped ``<source>/<platform_id>/<stem>``
+    where the stem matches the last path segment of the S3 URL, minus the
+    file extension. Substring matching on the stem handles the ``.jpeg /
+    .png / .webp / .JPEG`` variants without an extension-specific matcher.
+    """
+    urls = list(candidate.get("image_urls") or [])
+    if not urls:
+        return
+    stem = best_image_id.rsplit("/", 1)[-1]
+    if not stem:
+        return
+    target_i = -1
+    for i, url in enumerate(urls):
+        if stem in str(url):
+            target_i = i
+            break
+    if target_i <= 0:
+        return
+    match = urls.pop(target_i)
+    urls.insert(0, match)
+    candidate["image_urls"] = urls
+    candidate["hero_image_url"] = match
 
 
 def filter_hard_facts(db_path: Path, hard_facts: HardFilters) -> list[dict[str, Any]]:
@@ -49,6 +88,7 @@ def _rerank_hybrid(
     user_id: int | None = None,
     personalize: bool = False,
     users_db_path: Path | None = None,
+    image_pil: "PILImage | None" = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Collect BM25 + visual + text_embed + soft + (opt) memory rankings and
     fuse them via RRF.
@@ -70,9 +110,19 @@ def _rerank_hybrid(
         return candidates, 0
 
     listing_ids = [str(c["listing_id"]) for c in candidates]
-    rankings: list[list[str]] = [listing_ids]  # BM25 channel (input order)
+    # BM25 channel = input order. Skip it for image-only queries (empty text)
+    # because then "input order" degenerates to natural DB order, which would
+    # otherwise dominate the RRF fusion and drown the real DINOv2 look-alikes.
+    rankings: list[list[str]] = []
+    if query.strip():
+        rankings.append(listing_ids)
 
-    if visual_enabled() and visual_is_loaded():
+    # SigLIP visual (text→image) and Arctic semantic (text→text) both need a
+    # non-empty query to produce a meaningful ranking. On an image-only query
+    # (empty text), their encoders return a near-neutral vector and every
+    # listing scores roughly the same, wasting an RRF slot. Skip both.
+    has_text = bool(query.strip())
+    if has_text and visual_enabled() and visual_is_loaded():
         visual_scores = visual_score_candidates(query, candidates)
         rankings.append(
             sorted(visual_scores.keys(), key=lambda lid: -visual_scores[lid])
@@ -80,13 +130,41 @@ def _rerank_hybrid(
     else:
         visual_scores = {}
 
-    if text_embed_enabled() and text_embed_is_loaded():
+    if has_text and text_embed_enabled() and text_embed_is_loaded():
         text_embed_scores = text_embed_score_candidates(query, candidates)
         rankings.append(
             sorted(text_embed_scores.keys(), key=lambda lid: -text_embed_scores[lid])
         )
     else:
         text_embed_scores = {}
+
+    # DINOv2 image-query channel. Only fires when the caller supplied a photo
+    # AND the DINOv2 store is loaded. The ranking is per-candidate max cosine
+    # vs the uploaded image embedding (same aggregation as the per-listing
+    # /similar endpoint). RRF-fused with every other ranking so text + image
+    # combine without one dominating. We also capture which specific image of
+    # each candidate scored highest, so downstream layers can surface that
+    # photo first on the card (UX: show the photo that actually matched).
+    dinov2_image_scores: dict[str, float] = {}
+    dinov2_best_image_ids: dict[str, str] = {}
+    if image_pil is not None and dinov2_enabled() and dinov2_is_loaded():
+        try:
+            dinov2_image_scores, dinov2_best_image_ids = score_candidates_for_image(
+                image_pil, candidates, return_best_image_ids=True
+            )
+            if dinov2_image_scores:
+                rankings.append(
+                    sorted(
+                        dinov2_image_scores.keys(),
+                        key=lambda lid: -dinov2_image_scores[lid],
+                    )
+                )
+        except Exception as exc:
+            print(
+                f"[WARN] _rerank_hybrid: expected=DINOv2 image ranking, "
+                f"got={type(exc).__name__}: {exc}, fallback=skip image channel",
+                flush=True,
+            )
 
     soft_rankings = build_soft_rankings(candidates, soft, db_path)
     rankings.extend(soft_rankings)
@@ -116,6 +194,13 @@ def _rerank_hybrid(
         listing_id = str(candidate["listing_id"])
         candidate["visual_score"] = visual_scores.get(listing_id)
         candidate["text_embed_score"] = text_embed_scores.get(listing_id)
+        candidate["dinov2_image_score"] = dinov2_image_scores.get(listing_id)
+        best_img_id = dinov2_best_image_ids.get(listing_id)
+        if best_img_id:
+            # Reorder this candidate's image_urls so the one that matched
+            # best is first. _to_listing_data reads image_urls as-is, so
+            # this must happen before rank_listings builds the response.
+            _reorder_image_urls_inplace(candidate, best_img_id)
         candidate["rrf_score"] = fused.get(listing_id, 0.0)
         candidate["soft_signals_activated"] = len(soft_rankings)
         candidate["memory_rankings_activated"] = memory_rankings_count
@@ -165,6 +250,9 @@ def _rerank_hybrid(
 def _pipeline_snapshot(
     candidates: list[dict[str, Any]],
     soft: SoftPreferences | None,
+    *,
+    image_query: bool = False,
+    has_text: bool = True,
 ) -> dict[str, Any]:
     """Describe which ranking channels actually ran this turn.
 
@@ -181,9 +269,16 @@ def _pipeline_snapshot(
         soft_count = int(candidates[0].get("soft_signals_activated") or 0)
         memory_count = int(candidates[0].get("memory_rankings_activated") or 0)
     return {
-        "bm25": True,  # always in the fusion (input order channel)
-        "visual": bool(visual_enabled() and visual_is_loaded()),
-        "text_embed": bool(text_embed_enabled() and text_embed_is_loaded()),
+        # BM25 input-order + text-based channels require a non-empty text
+        # query to contribute a meaningful ranking.
+        "bm25": has_text,
+        "visual": bool(has_text and visual_enabled() and visual_is_loaded()),
+        "text_embed": bool(
+            has_text and text_embed_enabled() and text_embed_is_loaded()
+        ),
+        "dinov2_image": bool(
+            image_query and dinov2_enabled() and dinov2_is_loaded()
+        ),
         "soft_rankings": soft_count,
         "memory": memory_count > 0,
         "memory_rankings": memory_count,
@@ -200,9 +295,27 @@ def query_from_text(
     user_id: int | None = None,
     personalize: bool = False,
     users_db_path: Path | None = None,
+    image_pil: "PILImage | None" = None,
 ) -> ListingsResponse:
+    """Main query path. ``image_pil`` is optional — when present, a DINOv2
+    image-similarity channel is added to the RRF fusion alongside BM25,
+    Arctic semantic, SigLIP visual, soft preferences and memory, so a text
+    query and an uploaded photo jointly drive the ranking.
+
+    Pure image queries (empty ``query``) still work — BM25 returns the full
+    candidate pool in natural order, Arctic contributes a weak ranking, and
+    the DINOv2 channel dominates via RRF. Pure text queries leave
+    ``image_pil=None`` and this function behaves exactly as before.
+    """
     hard_facts = extract_hard_facts(query)
-    hard_facts.limit = max(limit, HYBRID_POOL)
+    # Image queries can match any listing in the 15,291-listing DINOv2 pool;
+    # without a text query there's no lexical/semantic signal to narrow the
+    # candidate set, so we need to widen the pool or the top DINOv2 hits
+    # will be outside it and get RRF-zero by omission. 25k covers the full
+    # corpus and one extra matmul at ranking time is cheap.
+    hard_facts.limit = (
+        25546 if image_pil is not None else max(limit, HYBRID_POOL)
+    )
     hard_facts.offset = 0
     soft_facts = extract_soft_facts(query)
     candidates = filter_hard_facts(db_path, hard_facts)
@@ -215,8 +328,14 @@ def query_from_text(
         user_id=user_id,
         personalize=personalize,
         users_db_path=users_db_path,
+        image_pil=image_pil,
     )
-    pipeline = _pipeline_snapshot(candidates, hard_facts.soft_preferences)
+    pipeline = _pipeline_snapshot(
+        candidates,
+        hard_facts.soft_preferences,
+        image_query=image_pil is not None,
+        has_text=bool(query.strip()),
+    )
     candidates = candidates[offset : offset + limit]
     candidates = filter_soft_facts(candidates, soft_facts)
     _attach_match_details(candidates, hard_facts, db_path)
@@ -232,6 +351,7 @@ def query_from_text(
             # user dismissed them (or a very similar one) earlier. Drives
             # the "N listings hidden" toast in the demo UI.
             "hidden_dismissed": dismissed_dropped,
+            "has_image_query": image_pil is not None,
         },
     )
 

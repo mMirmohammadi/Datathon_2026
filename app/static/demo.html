@@ -181,14 +181,34 @@
             name="query"
             autocomplete="off"
             placeholder="e.g. 3 rooms in Zurich, with a balcony, quiet street, near a park…"
-            required
           />
+          <!-- Attach a photo to steer the visual side of the ranking. The
+               file is POSTed with the query as multipart/form-data to
+               /listings/search/multi; the server adds a DINOv2 cosine
+               ranking to the RRF fusion. -->
+          <label for="search-image-input" class="search-attach-btn" title="Attach a photo — we'll rank homes by what yours looks like, alongside your text">
+            📎
+            <span class="sr-only">Attach a photo</span>
+          </label>
+          <input type="file" id="search-image-input" name="file" accept="image/jpeg,image/png,image/webp" hidden />
           <select id="limit" name="limit" title="How many homes to show">
             <option value="10">Show 10</option>
             <option value="25" selected>Show 25</option>
             <option value="50">Show 50</option>
           </select>
           <button type="submit" class="search-submit">Search</button>
+        </div>
+        <!-- Attached-photo chip. Renders only once the user picks an image.
+             Click × to remove and run a pure-text search. -->
+        <div id="search-image-chip-wrap" class="search-image-chip-wrap" hidden>
+          <div class="search-image-chip" id="search-image-chip">
+            <img id="search-image-chip-thumb" alt="" />
+            <div class="search-image-chip-meta">
+              <span class="search-image-chip-title">Ranking with your photo</span>
+              <span class="search-image-chip-sub muted small" id="search-image-chip-name">—</span>
+            </div>
+            <button type="button" id="search-image-chip-clear" class="search-image-chip-clear" title="Remove the photo">×</button>
+          </div>
         </div>
         <div class="examples">
           <span class="muted small examples-label">Need a starting point? Try one of these:</span>
