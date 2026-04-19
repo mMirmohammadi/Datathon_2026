@@ -134,6 +134,7 @@ def _to_listing_data(candidate: dict[str, Any]) -> ListingData:
         title=candidate["title"],
         description=candidate.get("description"),
         street=candidate.get("street"),
+        house_number=_coerce_str(candidate.get("house_number")),
         city=candidate.get("city"),
         postal_code=_coerce_str(candidate.get("postal_code")),
         canton=candidate.get("canton"),

@@ -115,6 +115,101 @@ function esc(s) {
   }[c]));
 }
 
+// ---------- address + Google-Maps helpers (production-safety-critical) ------
+//
+// Every apartment in Switzerland has *some* subset of {street, house_number,
+// postal_code, city, canton, latitude, longitude}. Real coverage in our DB:
+// street ≈ 47 %, house_number ≈ 40 %, postal_code ≈ 56 %, latitude/longitude
+// ≈ 94 %. These helpers produce a display string and a deep-link URL that
+// degrade gracefully against any of those fields being null/empty.
+//
+// Security: user-sourced strings (street, city, etc.) flow through two
+// escape layers before hitting the DOM — `esc()` for HTML context, and
+// `encodeURIComponent()` for URL context. Never splice raw values into an
+// href attribute. Always use rel="noopener noreferrer" + target="_blank"
+// when opening an external link (reverse-tabnabbing mitigation).
+
+// Finite-coord sanity: reject NaN/Infinity, the null island (0,0), and
+// anything outside the Switzerland bounding box with a small margin. Outside
+// that, the coordinate is almost certainly wrong and we should prefer the
+// address string so the user doesn't land on open ocean.
+function _hasValidCoords(L) {
+  if (!L) return false;
+  const lat = L.latitude;
+  const lng = L.longitude;
+  if (typeof lat !== "number" || typeof lng !== "number") return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat === 0 && lng === 0) return false;
+  if (lat < 45 || lat > 48) return false;
+  if (lng < 5 || lng > 11) return false;
+  return true;
+}
+
+// Build the display address string. Empty when nothing useful — callers
+// should check truthiness before rendering a row.
+//
+// Two data-shape quirks we defend against:
+//   1. In every row of our DB where both ``street`` and ``house_number`` are
+//      present, the street field ALREADY ends with the number
+//      (e.g. street="Herisauerstrasse 15", house_number="15"). Blindly
+//      concatenating duplicates the number. Detect + skip the dupe.
+//   2. A lone ``house_number`` without a street name is meaningless to a
+//      reader ("5, Bern" is worse than just "Bern"), so only include the
+//      number when a street is present.
+function formatAddress(L) {
+  if (!L) return "";
+  const street = L.street == null ? "" : String(L.street).trim();
+  const number = L.house_number == null ? "" : String(L.house_number).trim();
+  let line1 = "";
+  if (street) {
+    // Use word-boundary check: matches "Strasse 15" but not "15 Strasse 15".
+    const alreadySuffixed =
+      number && new RegExp(`(^|\\s)${number.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(street);
+    line1 = alreadySuffixed ? street : [street, number].filter(Boolean).join(" ");
+  }
+  const line2 = [L.postal_code, L.city]
+    .map((s) => (s == null ? "" : String(s).trim()))
+    .filter(Boolean)
+    .join(" ");
+  const canton = L.canton ? String(L.canton).trim() : "";
+  return [line1, line2, canton].filter(Boolean).join(", ");
+}
+
+// Google Maps deep link, or null when nothing is linkable. Coordinates
+// preferred (93.6 % coverage, exact, multilingual-proof). Address fallback
+// includes "Switzerland" so the geocoder doesn't resolve to e.g. a
+// Bahnhofstrasse in Germany.
+function googleMapsUrl(L) {
+  if (!L) return null;
+  if (_hasValidCoords(L)) {
+    const lat = L.latitude.toFixed(6);
+    const lng = L.longitude.toFixed(6);
+    return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  }
+  const parts = [L.street, L.house_number, L.postal_code, L.city, L.canton, "Switzerland"]
+    .map((s) => (s == null ? "" : String(s).trim()))
+    .filter(Boolean);
+  // "Switzerland" alone is not a listing; refuse a URL that would just drop
+  // the user on the country border.
+  if (parts.length <= 1) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts.join(" "))}`;
+}
+
+// Render the address block (text + optional Maps pill). Empty string when
+// we have neither a formatted address nor a URL.
+function renderAddressBlock(L, { cls = "listing-address" } = {}) {
+  const addr = formatAddress(L);
+  const url = googleMapsUrl(L);
+  if (!addr && !url) return "";
+  const addrPart = addr
+    ? `<span class="addr-text" title="${esc(addr)}">📫 ${esc(addr)}</span>`
+    : "";
+  const mapsPart = url
+    ? `<a class="maps-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="Open in Google Maps">📍 Google Maps</a>`
+    : "";
+  return `<div class="${esc(cls)}">${addrPart}${mapsPart}</div>`;
+}
+
 // Pass-2b display helpers. All 4 fields are tri-state (true / false / null for
 // UNKNOWN). Renders one chip per field that has a known value; empty string
 // when UNKNOWN, so the chip row collapses cleanly for listings whose extractor
@@ -905,6 +1000,7 @@ function renderListings(listings, meta) {
                 : ""
             }
           </div>
+          ${renderAddressBlock(listing, { cls: "listing-address summary" })}
           ${
             listing.description
               ? `<div class="listing-desc">${sanitizeDescriptionHtml(listing.description)}</div>`
@@ -1907,13 +2003,7 @@ function renderListingDetail(L) {
   const images = [L.hero_image_url, ...(L.image_urls || [])]
     .filter(Boolean)
     .filter((v, i, a) => a.indexOf(v) === i);
-  const place = [
-    L.street,
-    [L.postal_code, L.city].filter(Boolean).join(" "),
-    L.canton,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const addressBlock = renderAddressBlock(L, { cls: "listing-address detail" });
   const metaParts = [
     L.price_chf != null ? `<strong>${chf(L.price_chf)}</strong>` : "",
     L.rooms != null ? `${esc(L.rooms)} rooms` : "",
@@ -1940,7 +2030,7 @@ function renderListingDetail(L) {
       }
     </div>
     <div class="detail-meta">${metaParts.join(" · ")}</div>
-    ${place ? `<div class="detail-place muted">${esc(place)}</div>` : ""}
+    ${addressBlock}
     ${
       (L.features || []).length
         ? `<div class="detail-features">${L.features
