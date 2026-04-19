@@ -3940,7 +3940,40 @@ function _wireHelpDrawer() {
   const dialog = document.getElementById("help-drawer");
   const closeBtn = document.getElementById("help-drawer-close");
   if (!openBtn || !dialog) return;
+
+  // First-visit nudge. Toggle the CSS pulse on the Guide button the first
+  // time a given browser sees the site, then persist a flag so repeat
+  // visitors don't get pulsed at. Also honour `prefers-reduced-motion`
+  // — no pulse for users who've opted out of animation.
+  const FIRST_VISIT_KEY = "datathon2026_guide_seen";
+  const reduceMotion = window.matchMedia?.(
+    "(prefers-reduced-motion: reduce)"
+  ).matches;
+  try {
+    const seen = window.localStorage.getItem(FIRST_VISIT_KEY);
+    if (!seen && !reduceMotion) {
+      openBtn.classList.add("is-fresh");
+    }
+  } catch (e) {
+    // localStorage can be blocked (private mode, strict CSP); pulse anyway.
+    console.info(
+      `[INFO] help_first_visit: expected=localStorage, got=${e.message}, ` +
+        `fallback=always-pulse until next reload`,
+    );
+    if (!reduceMotion) openBtn.classList.add("is-fresh");
+  }
+  const markSeen = () => {
+    openBtn.classList.remove("is-fresh");
+    try {
+      window.localStorage.setItem(FIRST_VISIT_KEY, "1");
+    } catch (_e) {
+      // Same swallow as above; silent fallback is fine here since we'll
+      // re-check on the next page load.
+    }
+  };
+
   openBtn.addEventListener("click", () => {
+    markSeen();
     if (typeof dialog.showModal === "function") {
       dialog.showModal();
     } else {

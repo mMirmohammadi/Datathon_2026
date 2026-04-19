@@ -3573,3 +3573,127 @@ code {
   color: #ffffff;
   transform: translateY(-1px);
 }
+
+/* =========================================================================
+   INFO DOTS — slim inline hint icons with CSS-only hover/focus tooltips.
+   Used next to widget labels so first-time users learn the interaction
+   model without having to open the full guide drawer. Every tooltip payload
+   lives in `data-tip` on the dot itself — no JS, no positioning library.
+   Designed to be small (15px), unobtrusive (muted grey), and only visually
+   claim attention on hover/focus (amber tint + floating tip).
+   ========================================================================= */
+
+.info-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #eef0f2;
+  color: #6b7280;
+  font-size: 10px;
+  font-weight: 700;
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+  position: relative;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+              transform 0.15s ease;
+  vertical-align: middle;
+}
+
+.info-dot:hover,
+.info-dot:focus {
+  background: #fff7ed;
+  color: #b45309;
+  border-color: #fcd6b4;
+  transform: scale(1.08);
+  outline: none;
+}
+
+/* Inverse palette for use on dark/amber backgrounds (e.g. the "Only top"
+   toggle when pressed). Keeps the glyph legible without breaking the
+   button's colour theme. */
+.info-dot-inverse {
+  background: rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.info-dot-inverse:hover,
+.info-dot-inverse:focus {
+  background: rgba(255, 255, 255, 0.6);
+  color: #78350f;
+}
+
+/* Floating tooltip — balloon + arrow. We use two pseudo-elements: the body
+   (::after) and a downward-pointing triangle arrow (::before). Both animate
+   together on :hover/:focus. The tip is positioned above the dot by default;
+   clamp against viewport edges via a slightly narrower max-width and
+   inline-block layout. */
+.info-dot::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  white-space: normal;
+  text-align: left;
+  width: 240px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #111827;
+  color: #f9fafb;
+  font-size: 11.5px;
+  font-weight: 400;
+  font-style: normal;
+  font-family: inherit;
+  line-height: 1.45;
+  letter-spacing: 0;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.18),
+    0 16px 28px rgba(0, 0, 0, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 800;                    /* above Leaflet popups (700) */
+}
+
+.info-dot::before {
+  content: "";
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: #111827;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+  z-index: 801;
+}
+
+.info-dot:hover::after,
+.info-dot:focus::after,
+.info-dot:hover::before,
+.info-dot:focus::before {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* First-visit nudge on the Guide button — a short, one-time attention pulse
+   so the user notices it exists. Toggled off by JS after the first open via
+   localStorage so repeat visitors don't get pulsed into fatigue. */
+@keyframes help-btn-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.55); }
+  50%      { box-shadow: 0 0 0 10px rgba(251, 191, 36, 0); }
+}
+
+.help-btn.is-fresh {
+  animation: help-btn-pulse 2.2s ease-in-out 1.2s 3;
+}

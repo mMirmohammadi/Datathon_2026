@@ -77,6 +77,34 @@ FEATURE_COLUMN_MAP = {
 }
 
 
+# Object categories where a NULL/unknown label is a reasonable match for the
+# user's intent. 47% of the corpus has `object_category IS NULL` at ingest
+# (mostly unlabelled small-apartment scrapes), so strict equality on e.g.
+# "furnished_apartment" wipes out thousands of semantically-compatible rows
+# — that was the "Möbliertes 1.5-Zimmer Studio in Bern Altstadt" bug.
+# But for distinctive categories (villa, commercial, parking, house,
+# hobby_room, garage) NULL is NOT a safe assumption; a NULL row is much
+# more likely to be an apartment than a villa, so letting NULL through on
+# those queries pollutes the results.
+#
+# Membership test here is CaseSensitive and must match the slugs produced
+# by app.core.normalize.translate_object_category (English canonical enum).
+_APARTMENT_LIKE_CATEGORIES: frozenset[str] = frozenset({
+    "apartment",
+    "furnished_apartment",
+    "studio",
+    "attic_apartment",
+    "maisonette",
+    "loft",
+    "penthouse",
+    "terrace_apartment",
+    "holiday_apartment",
+    "duplex",
+    "room",
+    "shared_room",
+})
+
+
 def _normalize_list(values: list[str] | None) -> list[str] | None:
     if not values:
         return None
@@ -191,16 +219,28 @@ def _build_where_and_params(
     object_category = _normalize_list(filters.object_category)
     if object_category:
         placeholders = ", ".join("?" for _ in object_category)
-        # NULL tolerance: 47% of rows have `object_category IS NULL` (unlabeled
-        # at ingest). Excluding them on every positive category filter wipes
-        # out half the corpus — including, e.g., a "Möbliertes 1.5-Zimmer
-        # Studio" in Bern Altstadt that's tagged NULL but matches semantically.
-        # NULL means "unknown", not "something else", so we let it through the
-        # hard filter; BM25 + text-embedding channels still downrank listings
-        # whose description doesn't match the query word.
-        where_clauses.append(
-            f"(l.object_category IN ({placeholders}) OR l.object_category IS NULL)"
-        )
+        # NULL tolerance, but only when the user is asking for an apartment-
+        # like category. 47% of listings have `object_category IS NULL` at
+        # ingest, and empirically those unlabelled rows are overwhelmingly
+        # small residential units — so strict equality on e.g.
+        # `furnished_apartment` wipes out 12k listings that are semantically
+        # compatible (the "Möbliertes 1.5-Zimmer Studio in Bern Altstadt"
+        # bug). But for distinctive categories (villa, commercial, parking,
+        # house, ...) NULL is NOT a safe bet — a NULL row is very unlikely
+        # to be a villa, so letting NULL through pollutes those searches
+        # (live test before this guard: "villa in Lugano" went from 1 to 46
+        # results, 45 of which were NULL-category and probably not villas).
+        #
+        # Rule: allow NULL only when ALL requested categories are
+        # apartment-like. Mixed lists (e.g. ["studio", "villa"]) default to
+        # strict — the user is asking for a specific thing that villa-NULL
+        # leakage would violate.
+        if all(cat in _APARTMENT_LIKE_CATEGORIES for cat in object_category):
+            where_clauses.append(
+                f"(l.object_category IN ({placeholders}) OR l.object_category IS NULL)"
+            )
+        else:
+            where_clauses.append(f"l.object_category IN ({placeholders})")
         params.extend(object_category)
 
     features = _normalize_list(filters.features)
