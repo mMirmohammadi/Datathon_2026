@@ -618,6 +618,84 @@ def query_from_filters(
     )
 
 
+def _tokensort(s: str) -> tuple[str, ...]:
+    """Lowercase + underscore/dash→space + whitespace-split + sort.
+
+    Used as a last-ditch landmark matcher so "UZH Zentrum" (typed) matches
+    landmark key "uzh_zentrum" (stored) even though the strict slugger
+    keeps underscores and would register them as distinct.
+    """
+    import unicodedata
+    norm = unicodedata.normalize("NFD", str(s or "")).lower()
+    norm = "".join(c for c in norm if not unicodedata.combining(c))
+    for ch in "_-":
+        norm = norm.replace(ch, " ")
+    return tuple(sorted(t for t in norm.split() if t))
+
+
+def _resolve_near_landmark_keys(hard_facts: HardFilters) -> list[str] | None:
+    """Map ``soft_preferences.near_landmark`` aliases to canonical landmark
+    keys so the SQL proximity filter can reference the right
+    ``dist_landmark_<key>_m`` columns.
+
+    Called when a user either (a) types "near ETH" and the LLM extracts the
+    alias, or (b) right-clicks a landmark pin on the map. Unresolved aliases
+    log a [WARN] and are dropped — the remaining resolvable keys still
+    apply. Returns None (not an empty list) when nothing resolves, to keep
+    `HardFilterParams.near_landmark_keys is None` a clean "filter disabled"
+    sentinel.
+
+    Two-pass resolution:
+      1. Strict :func:`landmarks.resolve` — matches by exact key or by
+         slug-equal alias.
+      2. Token-sort fallback — "UZH Zentrum" → ("uzh", "zentrum") matches
+         landmark key "uzh_zentrum" even though its aliases list is
+         ["UZH", "Universität Zürich", "University of Zurich"] (no
+         "UZH Zentrum" there). This is the same token-sort the map
+         client uses, so frontend and backend stay consistent.
+    """
+    from app.core import landmarks as _landmarks
+
+    soft = hard_facts.soft_preferences
+    if not soft or not soft.near_landmark:
+        return None
+
+    # Precompute tokensort→landmark lookup across every key + alias, ONLY
+    # on first call per process (landmarks.json is static). Stored on this
+    # function's attribute so we can reset it in tests if needed.
+    if not hasattr(_resolve_near_landmark_keys, "_tokensort_index"):
+        index: dict[tuple[str, ...], str] = {}
+        for lm in _landmarks.all_landmarks():
+            for name in (lm.key, *lm.aliases):
+                t = _tokensort(name)
+                if t and t not in index:
+                    index[t] = lm.key
+        _resolve_near_landmark_keys._tokensort_index = index
+    tokensort_index: dict[tuple[str, ...], str] = (
+        _resolve_near_landmark_keys._tokensort_index
+    )
+
+    keys: list[str] = []
+    for alias in soft.near_landmark:
+        lm = _landmarks.resolve(alias)
+        resolved_key = lm.key if lm is not None else None
+        if resolved_key is None:
+            # Token-sort fallback before giving up.
+            t = _tokensort(alias)
+            resolved_key = tokensort_index.get(t)
+        if resolved_key is None:
+            print(
+                f"[WARN] _resolve_near_landmark_keys: expected=known landmark "
+                f"alias in landmarks.json, got={alias!r}, fallback=drop from "
+                f"hard-filter (stays soft in the ranker)",
+                flush=True,
+            )
+            continue
+        if resolved_key not in keys:
+            keys.append(resolved_key)
+    return keys or None
+
+
 def to_hard_filter_params(hard_facts: HardFilters) -> HardFilterParams:
     return HardFilterParams(
         city=hard_facts.city,
@@ -645,6 +723,7 @@ def to_hard_filter_params(hard_facts: HardFilters) -> HardFilterParams:
         bathroom_shared=hard_facts.bathroom_shared,
         has_cellar=hard_facts.has_cellar,
         kitchen_shared=hard_facts.kitchen_shared,
+        near_landmark_keys=_resolve_near_landmark_keys(hard_facts),
         bm25_keywords=hard_facts.bm25_keywords,
         limit=hard_facts.limit,
         offset=hard_facts.offset,

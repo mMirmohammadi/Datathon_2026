@@ -40,10 +40,25 @@ class HardFilterParams:
     bathroom_shared: bool | None = None
     has_cellar: bool | None = None
     kitchen_shared: bool | None = None
+    # Precomputed landmark keys (resolved upstream from `soft_preferences.
+    # near_landmark`). When set, the SQL applies a disjunctive proximity
+    # filter: a listing must be within NEAR_LANDMARK_RADIUS_M of AT LEAST
+    # ONE of these landmarks. Any unresolved alias is dropped by the caller
+    # with a [WARN]; an all-empty list means "no landmark filter" — the
+    # feature stays soft in the ranker.
+    near_landmark_keys: list[str] | None = None
     bm25_keywords: list[str] | None = None
     limit: int = 20
     offset: int = 0
     sort_by: str | None = None
+
+
+# Radius within which a listing is considered "near" a landmark, in metres.
+# 3 km covers a generous ~30-min walk OR a couple of tram stops in a Swiss
+# city — tight enough that "near ETH" excludes the bulk of the 25k corpus
+# (714 rows near ETH OR HB Zurich vs 23,909 unfiltered), permissive enough
+# that the user isn't surprised by a listing across the street failing.
+NEAR_LANDMARK_RADIUS_M = 3000
 
 
 FEATURE_COLUMN_MAP = {
@@ -215,7 +230,41 @@ def _build_where_and_params(
         where_clauses.append("e.kitchen_shared_filled = ?")
         params.append("true" if filters.kitchen_shared else "false")
 
+    # Proximity filter: ANY-of semantics. We treat ``near_landmark`` as hard
+    # on the map SQL (otherwise the user-facing UX of "I selected ETH + UZH
+    # so please only show homes near them" is violated — reported as bug).
+    # The columns live on ``listings_ranking_signals``; the caller opts into
+    # the JOIN by asking :func:`_needs_signals_join`.
+    if filters.near_landmark_keys:
+        disjuncts: list[str] = []
+        for key in filters.near_landmark_keys:
+            if not key or not key.replace("_", "").isalnum():
+                # Defensive: the resolver should never hand us something ugly,
+                # but SQL-interpolating the key directly makes validation
+                # non-negotiable. Anything that's not alnum+underscore is
+                # dropped with a [WARN].
+                print(
+                    f"[WARN] _build_where_and_params: expected=landmark key "
+                    f"in [a-z0-9_]+, got={key!r}, fallback=skip",
+                    flush=True,
+                )
+                continue
+            col = f"dist_landmark_{key}_m"
+            disjuncts.append(f"(s.{col} IS NOT NULL AND s.{col} < ?)")
+            params.append(int(NEAR_LANDMARK_RADIUS_M))
+        if disjuncts:
+            where_clauses.append("(" + " OR ".join(disjuncts) + ")")
+
     return where_clauses, params
+
+
+def _needs_signals_join(filters: HardFilterParams) -> bool:
+    """True when the WHERE builder references `s.<col>` on
+    ``listings_ranking_signals``. Driven purely by whether any landmark
+    proximity filter is active; extend if you add more signal-backed
+    hard filters in the future.
+    """
+    return bool(filters.near_landmark_keys)
 
 
 def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, Any]]:
@@ -263,12 +312,21 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
             e.kitchen_shared_filled AS kitchen_shared_raw
     """
 
+    # listings_ranking_signals is only joined when the WHERE builder actually
+    # references `s.<col>` — avoids a wide join on unrelated queries.
+    signals_join = (
+        " LEFT JOIN listings_ranking_signals s ON s.listing_id = l.listing_id"
+        if _needs_signals_join(filters)
+        else ""
+    )
+
     if fts_match is not None:
         query = f"""
             SELECT {select_cols},
                 COALESCE(fts.bm25_score, {_FTS_NO_MATCH_SCORE}) AS bm25_score
             FROM listings l
             LEFT JOIN listings_enriched e ON e.listing_id = l.listing_id
+            {signals_join}
             LEFT JOIN (
                 SELECT rowid, bm25(listings_fts) AS bm25_score
                 FROM listings_fts
@@ -281,6 +339,7 @@ def search_listings(db_path: Path, filters: HardFilterParams) -> list[dict[str, 
             SELECT {select_cols}
             FROM listings l
             LEFT JOIN listings_enriched e ON e.listing_id = l.listing_id
+            {signals_join}
         """
 
     if where_clauses:
@@ -459,11 +518,17 @@ def search_listing_coords(
     """
     where_clauses, params = _build_where_and_params(filters)
 
-    query = """
+    signals_join = (
+        " LEFT JOIN listings_ranking_signals s ON s.listing_id = l.listing_id"
+        if _needs_signals_join(filters)
+        else ""
+    )
+    query = f"""
         SELECT l.listing_id, l.latitude, l.longitude, l.city, l.canton,
                l.price, l.rooms, l.area, l.object_category
         FROM listings l
         LEFT JOIN listings_enriched e ON e.listing_id = l.listing_id
+        {signals_join}
     """
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
