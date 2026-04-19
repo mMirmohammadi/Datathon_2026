@@ -287,6 +287,54 @@ def _pipeline_snapshot(
     }
 
 
+def _merge_hard_filters_override(
+    base: HardFilters, override: HardFilters | None
+) -> HardFilters:
+    """Layer a client-supplied filter override on top of the LLM-extracted
+    filters.
+
+    Semantics: for every field on ``override`` that is non-None, the base
+    field is replaced. None on the override means "defer to the LLM's
+    extraction" — so the client can refine one axis (e.g. ``max_price``)
+    without having to know every other field the LLM picked.
+
+    `near_landmark` is treated specially: the override's list is REPLACED
+    wholesale (not merged) so the user can explicitly strip the LLM's
+    inferred landmarks by sending ``[]``. This matches the interactive-map
+    affordance where clicking an 'x' on a landmark chip should actually
+    remove it, not keep it under-the-hood.
+
+    Returns a new HardFilters; does NOT mutate inputs.
+    """
+    if override is None:
+        return base
+    payload = base.model_dump()
+    override_payload = override.model_dump()
+    for field, val in override_payload.items():
+        if val is None:
+            continue
+        if field == "soft_preferences":
+            # Merge soft prefs the same way: non-None override keys win.
+            existing = payload.get("soft_preferences") or {}
+            combined = dict(existing)
+            for sk, sv in val.items():
+                if sv is None:
+                    continue
+                combined[sk] = sv
+            payload["soft_preferences"] = combined
+        else:
+            payload[field] = val
+    try:
+        return HardFilters(**payload)
+    except Exception as exc:
+        print(
+            f"[WARN] merge_hard_filters_override: expected=valid HardFilters, "
+            f"got={type(exc).__name__}: {exc}, fallback=base filters unchanged",
+            flush=True,
+        )
+        return base
+
+
 def query_from_text(
     *,
     db_path: Path,
@@ -297,6 +345,7 @@ def query_from_text(
     personalize: bool = False,
     users_db_path: Path | None = None,
     image_pil: "PILImage | None" = None,
+    hard_filters_override: HardFilters | None = None,
 ) -> ListingsResponse:
     """Main query path. ``image_pil`` is optional — when present, a DINOv2
     image-similarity channel is added to the RRF fusion alongside BM25,
@@ -307,8 +356,15 @@ def query_from_text(
     candidate pool in natural order, Arctic contributes a weak ranking, and
     the DINOv2 channel dominates via RRF. Pure text queries leave
     ``image_pil=None`` and this function behaves exactly as before.
+
+    ``hard_filters_override`` is the hook the interactive map widgets use to
+    refine a search without re-typing: on every widget change the frontend
+    re-submits the same text query with the current widget state attached,
+    and non-None override fields win against the LLM-extracted plan. Passing
+    None preserves legacy behaviour.
     """
     hard_facts = extract_hard_facts(query)
+    hard_facts = _merge_hard_filters_override(hard_facts, hard_filters_override)
     # Image queries can match any listing in the 15,291-listing DINOv2 pool;
     # without a text query there's no lexical/semantic signal to narrow the
     # candidate set, so we need to widen the pool or the top DINOv2 hits

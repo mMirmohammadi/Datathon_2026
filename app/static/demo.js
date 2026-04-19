@@ -385,6 +385,12 @@ const MAP_STATE = {
   hullLayer: null,
   recenterControl: null,
   markersByListingId: new Map(),
+  // Markers that belong to the ranker's top-N. Subset of markersByListingId;
+  // used to style them distinctly and power the "only top" visibility toggle.
+  topListingIds: new Set(),
+  // Reverse-lookup for landmark markers so right-click semantics can find
+  // the key associated with a given DOM element.
+  landmarkMarkersByKey: new Map(),
   resultBounds: null,
   activeAreaFilter: null,
   fetchToken: 0,
@@ -392,8 +398,46 @@ const MAP_STATE = {
   // the user stayed in List view). Replayed on the first open of the Map
   // tab so no search ever lands "invisibly".
   pendingPoints: null,
+  pendingTopIds: null,
   shownOnce: false,
+  // Client-side visibility toggle: when true, faded (non-top) markers are
+  // hidden from the cluster layer. Pure view state; no backend refetch.
+  onlyTopVisible: false,
+  // Full widget state. Hydrated from meta.query_plan on every response so
+  // the panel visually tracks whatever the LLM extracted; any user change
+  // flows back via debounced re-submit with hard_filters_override.
+  widgetFilters: {
+    min_price: null,
+    max_price: null,
+    min_rooms: null,
+    max_rooms: null,
+    min_area: null,             // living_area_sqm lower bound
+    max_area: null,             // living_area_sqm upper bound
+    bathroom_shared: null,      // tri-state: null | true | false
+    kitchen_shared: null,
+    has_cellar: null,
+    near_landmark: [],          // list of alias strings; empty means "clear"
+  },
+  // "Did the user edit the landmark list since the last LLM hydration?"
+  // When true, resubmit sends near_landmark even if it's empty (so removals
+  // take effect); when false, resubmit defers to the LLM's extraction.
+  landmarkListDirty: false,
+  // Preserved across widget-driven re-submits so the backend rebuilds the
+  // full RRF pipeline from the original natural-language text.
+  lastQueryText: "",
+  lastAttachedImageKept: false, // stub; image-query re-submit is out of scope
+  // One debounce timer across all widget inputs so rapid slider drags
+  // coalesce into a single backend call.
+  widgetDebounceTimer: null,
+  widgetSubmitToken: 0,
+  // Set by the widget toggle handlers when the user clicks a toggle; the
+  // same value is mirrored into button aria-pressed so CSS can theme it.
+  // 'on' -> true  (require), 'off' -> false (exclude), 'any' -> null (reset)
 };
+
+const _WIDGET_DEBOUNCE_MS = 320;
+const _PRICE_RANGE_MAX = 10000;  // CHF cap for the range-slider UI
+const _AREA_RANGE_MAX = 400;     // m² cap for the size-slider UI (covers 99%)
 
 // Swiss outer bbox (lat/lng). Slightly padded so the country doesn't hit the
 // viewport edges when nothing else is loaded yet.
@@ -534,23 +578,30 @@ function _clusterLabel(n) {
 
 // ---- Listing-marker rendering --------------------------------------------
 
-function renderMapPoints(points) {
+function renderMapPoints(points, topListingIds) {
   _initMapOnce();
+  const topSet = topListingIds instanceof Set ? topListingIds : new Set(topListingIds || []);
   if (!MAP_STATE.map) {
-    // Map container isn't visible yet — buffer the points and replay when
-    // the user first opens the Map tab. Never drop data silently.
+    // Map container isn't visible yet — buffer both the points and the
+    // top-id set; the tab-flip code path will replay them together.
     MAP_STATE.pendingPoints = points;
+    MAP_STATE.pendingTopIds = topSet;
+    MAP_STATE.topListingIds = topSet;
     _updateTabCounts(points.length);
+    _updateTopToggleVisibility(topSet.size);
     return;
   }
   MAP_STATE.pendingPoints = null;
+  MAP_STATE.pendingTopIds = null;
   MAP_STATE.clusterLayer.clearLayers();
   MAP_STATE.hullLayer.clearLayers();
   MAP_STATE.markersByListingId.clear();
   MAP_STATE.activeAreaFilter = null;
+  MAP_STATE.topListingIds = topSet;
   _updateAreaPill(0);
   _updateMapCounter(points.length);
   _updateTabCounts(points.length);
+  _updateTopToggleVisibility(topSet.size);
   if (!points.length) {
     MAP_STATE.resultBounds = null;
     MAP_STATE.map.flyToBounds(SWISS_BOUNDS, { duration: 0.7 });
@@ -558,36 +609,41 @@ function renderMapPoints(points) {
     return;
   }
 
-  const markers = [];
+  // Split top vs non-top so we can render them differently: tops as
+  // DivIcon markers with halo animations + hover bloom, non-tops as
+  // cheap canvas circleMarkers (soft amber, low opacity, still clickable).
+  const topMarkers = [];
+  const normalMarkers = [];
   for (const p of points) {
-    const m = L.circleMarker([p.lat, p.lng], {
-      radius: 8,                    // was 5 — bigger per user feedback
-      color: "#b45309",
-      weight: 1.5,
-      fillColor: "#fbbf24",
-      fillOpacity: 0.88,
-      // Named class so hover styling can hook via getElement() fallback.
-      className: "listing-dot",
-    });
-    m._listingId = String(p.listing_id);
+    const id = String(p.listing_id);
+    const isTop = topSet.has(id);
+    const m = isTop
+      ? _buildTopMarker(p)
+      : _buildNormalMarker(p);
+    m._listingId = id;
     m._mapPoint = p;
-    m.bindTooltip(_tooltipHtmlForListing(p), {
+    m._isTop = isTop;
+    m.bindTooltip(_tooltipHtmlForListing(p, isTop), {
       className: "listing-tooltip",
       direction: "top",
-      offset: [0, -8],
+      offset: isTop ? [0, -14] : [0, -8],
       opacity: 1,
     });
-    m.on("mouseover", _onMarkerHover);
-    m.on("mouseout", _onMarkerUnhover);
     m.on("click", () => _onMarkerClick(m._listingId));
-    markers.push(m);
-    MAP_STATE.markersByListingId.set(m._listingId, m);
+    if (!isTop) {
+      // Canvas circleMarker: hover animation is JS-driven.
+      m.on("mouseover", _onNormalMarkerHover);
+      m.on("mouseout", _onNormalMarkerUnhover);
+    }
+    MAP_STATE.markersByListingId.set(id, m);
+    (isTop ? topMarkers : normalMarkers).push(m);
   }
-  MAP_STATE.clusterLayer.addLayers(markers);
+  // Only add the non-top layer when the "only top" toggle is off.
+  if (!MAP_STATE.onlyTopVisible) {
+    MAP_STATE.clusterLayer.addLayers(normalMarkers);
+  }
+  MAP_STATE.clusterLayer.addLayers(topMarkers);
 
-  // Area hull: "beautifully selected" soft-fill polygon around the result
-  // set. Convex hull keeps the code small (no shape dataset) and shows the
-  // user at a glance what region their query covers.
   _renderResultHull(points);
 
   const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng]));
@@ -600,7 +656,88 @@ function renderMapPoints(points) {
   _setRecenterEnabled(true);
 }
 
-function _tooltipHtmlForListing(p) {
+// ---- Marker factories ----------------------------------------------------
+
+function _buildTopMarker(p) {
+  // DivIcon-based: the amber halo animation + gradient fill are CSS-driven,
+  // so hover/transform behaviour lives alongside the rest of the design
+  // system rather than in canvas rendering code.
+  const icon = L.divIcon({
+    className: "top-marker",
+    html: `
+      <div class="top-marker-halo" aria-hidden="true"></div>
+      <div class="top-marker-core" aria-hidden="true"></div>
+    `,
+    iconSize: L.point(26, 26),
+    iconAnchor: L.point(13, 13),
+  });
+  return L.marker([p.lat, p.lng], { icon, riseOnHover: true });
+}
+
+function _buildNormalMarker(p) {
+  // Canvas circleMarker — fast even at 10k+ markers. Faded amber so the
+  // top markers visually dominate. Still fully interactive.
+  return L.circleMarker([p.lat, p.lng], {
+    radius: 6,
+    color: "#f59e0b",
+    weight: 1,
+    opacity: 0.45,
+    fillColor: "#fde68a",
+    fillOpacity: 0.35,
+    className: "listing-dot listing-dot-normal",
+  });
+}
+
+function _onNormalMarkerHover(ev) {
+  ev.target.setStyle({
+    radius: 9,
+    weight: 1.5,
+    opacity: 0.85,
+    fillColor: "#fbbf24",
+    fillOpacity: 0.85,
+  });
+}
+function _onNormalMarkerUnhover(ev) {
+  ev.target.setStyle({
+    radius: 6,
+    weight: 1,
+    opacity: 0.45,
+    fillColor: "#fde68a",
+    fillOpacity: 0.35,
+  });
+}
+
+// ---- "Only top" visibility toggle (client-side, no refetch) --------------
+
+function _updateTopToggleVisibility(topCount) {
+  const btn = document.getElementById("map-toptoggle");
+  if (!btn) return;
+  btn.hidden = topCount === 0;
+}
+
+function toggleOnlyTop() {
+  const btn = document.getElementById("map-toptoggle");
+  if (!btn) return;
+  MAP_STATE.onlyTopVisible = !MAP_STATE.onlyTopVisible;
+  btn.setAttribute("aria-pressed", String(MAP_STATE.onlyTopVisible));
+  const label = document.getElementById("map-toptoggle-label");
+  if (label) {
+    label.textContent = MAP_STATE.onlyTopVisible
+      ? "Showing top matches"
+      : "Only top matches";
+  }
+  // Rebuild the cluster layer from scratch — quick and keeps cluster counts
+  // accurate in both directions.
+  if (!MAP_STATE.clusterLayer) return;
+  MAP_STATE.clusterLayer.clearLayers();
+  const all = Array.from(MAP_STATE.markersByListingId.values());
+  const toAdd = MAP_STATE.onlyTopVisible
+    ? all.filter((m) => m._isTop)
+    : all;
+  MAP_STATE.clusterLayer.addLayers(toAdd);
+}
+
+function _tooltipHtmlForListing(p, isTop) {
   // Build a tiny card in HTML. Every field user-provided, so escape.
   const line1Parts = [];
   if (p.price_chf != null) line1Parts.push(`<b>${chf(p.price_chf)}</b>`);
@@ -609,21 +746,16 @@ function _tooltipHtmlForListing(p) {
   const line2Parts = [];
   if (p.city) line2Parts.push(esc(p.city));
   if (p.object_category) line2Parts.push(esc(p.object_category));
+  const badge = isTop
+    ? `<span class="tt-top-badge">★ Top match</span>`
+    : "";
   return `
     <div class="listing-tooltip-inner">
+      ${badge}
       <div class="tt-line1">${line1Parts.join(" · ") || "Listing"}</div>
       ${line2Parts.length ? `<div class="tt-line2">${line2Parts.join(" · ")}</div>` : ""}
-      <div class="tt-hint">click to scroll to this listing</div>
+      <div class="tt-hint">click to open this listing</div>
     </div>`;
-}
-
-function _onMarkerHover(ev) {
-  const m = ev.target;
-  m.setStyle({ radius: 11, fillOpacity: 1, weight: 2 });
-}
-function _onMarkerUnhover(ev) {
-  const m = ev.target;
-  m.setStyle({ radius: 8, fillOpacity: 0.88, weight: 1.5 });
 }
 
 // ---- Area hull (convex hull of result points) -----------------------------
@@ -674,6 +806,50 @@ function _convexHull(pts) {
 
 // ---- Landmarks layer (persistent, non-clustered) --------------------------
 
+// Category-specific inline SVGs (lucide-style; stroke=currentColor so the
+// category palette lives in CSS). 14px viewBox so the pin class can tint
+// them without re-encoding paths. Added categories beyond the seven
+// present in data/ranking/landmarks.json fall back to `.landmark-other`.
+const LANDMARK_ICONS = Object.freeze({
+  university:
+    // Graduation cap
+    '<svg viewBox="0 0 24 24"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/>' +
+    '<path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
+  transit:
+    // Train
+    '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="14" rx="2"/>' +
+    '<path d="M4 11h16"/><circle cx="9" cy="15" r="1.2"/><circle cx="15" cy="15" r="1.2"/>' +
+    '<path d="M8 21l-1-3M16 21l1-3"/></svg>',
+  lake:
+    // Waves
+    '<svg viewBox="0 0 24 24"><path d="M2 9c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0"/>' +
+    '<path d="M2 14c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0"/>' +
+    '<path d="M2 19c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0"/></svg>',
+  employer:
+    // Briefcase
+    '<svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/>' +
+    '<path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>' +
+    '<path d="M3 13h18"/></svg>',
+  oldtown:
+    // Tower / castle
+    '<svg viewBox="0 0 24 24"><path d="M4 20V9l4-2 4 2 4-2 4 2v11"/>' +
+    '<path d="M4 20h16"/><path d="M10 20v-5h4v5"/>' +
+    '<path d="M4 9V6M8 9V6M16 9V6M20 9V6"/></svg>',
+  cultural:
+    // Palette
+    '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c1.5 0 2-1 2-2s-.5-1.5 0-2 2.5 0 3.5-1a5 5 0 0 0 1.5-3.5c0-4.5-3-9.5-7-9.5z"/>' +
+    '<circle cx="8" cy="10" r="1.2"/><circle cx="11" cy="7" r="1.2"/>' +
+    '<circle cx="15" cy="8" r="1.2"/></svg>',
+  neighborhood:
+    // Two small houses
+    '<svg viewBox="0 0 24 24"><path d="M3 21V11l5-4 5 4v10"/><path d="M3 21h18"/>' +
+    '<path d="M13 21V13l4-3 4 3v8"/></svg>',
+});
+
+function _landmarkIconHtml(category) {
+  return LANDMARK_ICONS[category] || LANDMARK_ICONS.neighborhood;
+}
+
 async function _fetchAndRenderLandmarks() {
   try {
     const r = await fetch("/landmarks", { credentials: "same-origin" });
@@ -686,12 +862,14 @@ async function _fetchAndRenderLandmarks() {
     }
     const landmarks = await r.json();
     if (!Array.isArray(landmarks) || !landmarks.length) return;
+    MAP_STATE.landmarkMarkersByKey.clear();
     for (const lm of landmarks) {
+      const category = lm.category || "other";
       const icon = L.divIcon({
-        className: `landmark-pin landmark-${esc(lm.category || "other")}`,
-        html: `<div class="landmark-pin-dot" aria-hidden="true"></div>`,
-        iconSize: L.point(14, 14),
-        iconAnchor: L.point(7, 7),
+        className: `landmark-pin landmark-${category}`,
+        html: _landmarkIconHtml(category),
+        iconSize: L.point(26, 26),
+        iconAnchor: L.point(13, 13),
       });
       const m = L.marker([lm.lat, lm.lng], {
         icon,
@@ -699,27 +877,169 @@ async function _fetchAndRenderLandmarks() {
         riseOnHover: true,
         interactive: true,
       });
+      m._landmark = lm;
       m.bindTooltip(
         `<span class="landmark-tooltip-inner">
            <b>${esc(lm.name)}</b>
-           <span class="muted">· ${esc(lm.category || "landmark")}</span>
+           <span class="muted">· ${esc(category)}</span>
          </span>`,
         {
           className: "landmark-tooltip",
           direction: "top",
-          offset: [0, -6],
+          offset: [0, -12],
           opacity: 0.96,
           sticky: false,
         },
       );
+      // Left-click: detail popup bound to the marker. Opens on demand.
+      m.on("click", (ev) => _onLandmarkLeftClick(ev, lm));
+      // Right-click: toggle filter membership. L.DomEvent keeps the browser's
+      // native context menu from appearing over the map.
+      m.on("contextmenu", (ev) => {
+        L.DomEvent.preventDefault(ev.originalEvent);
+        L.DomEvent.stopPropagation(ev.originalEvent);
+        _onLandmarkRightClick(lm);
+      });
       MAP_STATE.landmarkLayer.addLayer(m);
+      MAP_STATE.landmarkMarkersByKey.set(lm.key, m);
     }
+    // Pins exist now — upgrade any in-chip names to their canonical display
+    // form (e.g. "zurich_hb" -> "Zürich HB"), then re-apply active states
+    // that hydration set before the pin layer existed.
+    _upgradeLandmarkChipNames();
+    _renderLandmarkChips();
+    _syncLandmarkActiveStates();
   } catch (e) {
     console.warn(
       `[WARN] landmarks_fetch_error: expected=/landmarks reachable, ` +
         `got=${e.message}, fallback=map renders without landmark overlay`,
     );
   }
+}
+
+function _onLandmarkLeftClick(ev, lm) {
+  // Build a popup with name + category + a hint on how to add to filters.
+  // Popup is bound per-click so it can include live "is-active" status
+  // without having to manage a single long-lived popup element.
+  const active = MAP_STATE.widgetFilters.near_landmark.some(
+    (a) => _slugEq(a, lm.name) || _slugEq(a, lm.key),
+  );
+  const detail = L.popup({
+    className: "landmark-popup",
+    closeButton: true,
+    autoPanPadding: L.point(30, 30),
+    maxWidth: 240,
+  }).setLatLng(ev.latlng).setContent(`
+    <div class="landmark-popup-inner">
+      <div class="lp-title">${esc(lm.name)}</div>
+      <div class="lp-sub">${esc(lm.category || "landmark")}</div>
+      <div class="lp-hint">
+        ${
+          active
+            ? '<span class="lp-active">✓ already in your filter</span>'
+            : '<span class="muted">Right-click the pin to add as a "near" filter.</span>'
+        }
+      </div>
+    </div>
+  `);
+  MAP_STATE.map.openPopup(detail);
+}
+
+function _slugEq(a, b) {
+  if (a == null || b == null) return false;
+  return _landmarkNorm(a) === _landmarkNorm(b);
+}
+
+// Word-order-insensitive comparison: split into tokens, sort. Handles the
+// "Zürich HB" ↔ "HB Zürich" case the earlier naive compare missed.
+function _landmarkNorm(s) {
+  if (s == null) return "";
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")     // strip combining diacritics
+    .replace(/[._\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .sort()
+    .join(" ");
+}
+
+// "Does any name the user typed / LLM emitted match this landmark's known
+// identities?" Returns the matched candidate (truthy) or "" (falsy) so
+// callers can short-circuit on truthiness.
+function _landmarkMatchesAny(lm, candidates) {
+  if (!lm || !Array.isArray(candidates) || !candidates.length) return "";
+  const haystack = new Set(
+    [lm.name, lm.key, ...(Array.isArray(lm.aliases) ? lm.aliases : [])]
+      .filter(Boolean)
+      .map(_landmarkNorm),
+  );
+  for (const c of candidates) {
+    if (haystack.has(_landmarkNorm(c))) return c;
+  }
+  return "";
+}
+
+function _onLandmarkRightClick(lm) {
+  // Add the landmark's display name to near_landmark if not already present;
+  // then debounce-resubmit the search with the widget state as override.
+  const name = lm.name || lm.key;
+  const list = MAP_STATE.widgetFilters.near_landmark.slice();
+  const existingMatch = _landmarkMatchesAny(lm, list);
+  if (existingMatch) {
+    // Second right-click removes — quick toggle affordance.
+    const idx = list.findIndex((a) => _slugEq(a, existingMatch));
+    if (idx >= 0) list.splice(idx, 1);
+    _setLandmarkPinActive(lm.key, false);
+  } else {
+    list.push(name);
+    _setLandmarkPinActive(lm.key, true);
+  }
+  MAP_STATE.widgetFilters.near_landmark = list;
+  MAP_STATE.landmarkListDirty = true;
+  _renderWidgetPanel();
+  _scheduleWidgetResubmit();
+}
+
+function _setLandmarkPinActive(key, isActive) {
+  const m = MAP_STATE.landmarkMarkersByKey.get(key);
+  if (!m) return;
+  const el = m.getElement();
+  if (!el) return;
+  el.classList.toggle("landmark-is-active", !!isActive);
+}
+
+// When landmarks first arrive we may already hold "near_landmark" entries
+// that came from hydration before the pin data existed (e.g. "zurich_hb"
+// derived from commute_target). Upgrade each entry to the landmark's
+// canonical display name so chip labels read cleanly.
+function _upgradeLandmarkChipNames() {
+  const list = MAP_STATE.widgetFilters.near_landmark || [];
+  if (!list.length || !MAP_STATE.landmarkMarkersByKey.size) return;
+  const unresolved = [];
+  const upgraded = list.map((raw) => {
+    for (const m of MAP_STATE.landmarkMarkersByKey.values()) {
+      if (_landmarkMatchesAny(m._landmark, [raw])) {
+        return m._landmark.name || raw;
+      }
+    }
+    unresolved.push(raw);
+    return raw;
+  });
+  if (unresolved.length) {
+    // The user typed (or the LLM emitted) a landmark name that doesn't
+    // match any entry in /landmarks. Keep the chip — the backend still
+    // honours raw strings in `near_landmark` for BM25 purposes — but flag
+    // it so we can spot landmark-data drift or aliasing gaps.
+    console.info(
+      `[INFO] landmark_chip_unresolved: expected=match in /landmarks aliases, ` +
+        `got=${JSON.stringify(unresolved)}, fallback=raw chip + no pin glow`,
+    );
+  }
+  MAP_STATE.widgetFilters.near_landmark = upgraded;
 }
 
 // ---- Recenter control ----------------------------------------------------
@@ -874,16 +1194,17 @@ function setActiveView(view) {
     // Drain any searches that happened while the map was hidden.
     if (MAP_STATE.map && MAP_STATE.pendingPoints !== null) {
       const pts = MAP_STATE.pendingPoints;
+      const topIds = MAP_STATE.pendingTopIds;
       MAP_STATE.pendingPoints = null;
-      // Let the tile layer paint a frame first, then render.
-      setTimeout(() => renderMapPoints(pts), 60);
+      MAP_STATE.pendingTopIds = null;
+      setTimeout(() => renderMapPoints(pts, topIds), 60);
     }
   }
 }
 
 // ---- Fetch ---------------------------------------------------------------
 
-async function fetchAndRenderMap(mapRequestBody) {
+async function fetchAndRenderMap(mapRequestBody, topListingIds) {
   const myToken = ++MAP_STATE.fetchToken;
   _updateMapCounter(null);
   try {
@@ -902,13 +1223,474 @@ async function fetchAndRenderMap(mapRequestBody) {
     }
     const data = await r.json();
     if (myToken !== MAP_STATE.fetchToken) return;
-    renderMapPoints(data.points || []);
+    renderMapPoints(data.points || [], topListingIds);
   } catch (e) {
     console.warn(
       `[WARN] map_fetch_error: expected=/listings/map reachable, ` +
         `got=${e.message}, fallback=leave current map state`,
     );
   }
+}
+
+// ---- Widget panel: price slider, feature toggles, landmarks --------------
+//
+// The panel's DOM exists in demo.html; this section owns all the state and
+// event plumbing. Two-way binding:
+//   1. Every search result calls hydrateWidgetsFromPlan(plan), which copies
+//      non-null fields from meta.query_plan into MAP_STATE.widgetFilters
+//      and refreshes the DOM so the UI visibly reflects what the LLM saw.
+//   2. Any user change in the panel updates MAP_STATE.widgetFilters and
+//      schedules a debounced re-submit via resubmitSearchWithWidgets().
+//      The backend merges the override on top of a fresh LLM extraction.
+
+function _wireWidgetPanel() {
+  const priceMin = document.getElementById("mf-price-min");
+  const priceMax = document.getElementById("mf-price-max");
+  const rangeMin = document.getElementById("mf-price-range-min");
+  const rangeMax = document.getElementById("mf-price-range-max");
+  const roomsMin = document.getElementById("mf-rooms-min");
+  const roomsMax = document.getElementById("mf-rooms-max");
+  const areaMin  = document.getElementById("mf-area-min");
+  const areaMax  = document.getElementById("mf-area-max");
+  const areaRangeMin = document.getElementById("mf-area-range-min");
+  const areaRangeMax = document.getElementById("mf-area-range-max");
+  const collapse = document.getElementById("map-filters-collapse");
+  const reset    = document.getElementById("mf-reset");
+  const toptg    = document.getElementById("map-toptoggle");
+
+  if (priceMin) priceMin.addEventListener("input", _onPriceMinInput);
+  if (priceMax) priceMax.addEventListener("input", _onPriceMaxInput);
+  if (rangeMin) rangeMin.addEventListener("input", _onRangeMinInput);
+  if (rangeMax) rangeMax.addEventListener("input", _onRangeMaxInput);
+  if (roomsMin) roomsMin.addEventListener("input", _onRoomsMinInput);
+  if (roomsMax) roomsMax.addEventListener("input", _onRoomsMaxInput);
+  if (areaMin)  areaMin.addEventListener("input", _onAreaMinInput);
+  if (areaMax)  areaMax.addEventListener("input", _onAreaMaxInput);
+  if (areaRangeMin) areaRangeMin.addEventListener("input", _onAreaRangeMinInput);
+  if (areaRangeMax) areaRangeMax.addEventListener("input", _onAreaRangeMaxInput);
+
+  document.querySelectorAll(".mf-toggle[data-field]").forEach((btn) => {
+    btn.addEventListener("click", () => _onToggleClick(btn));
+  });
+
+  if (collapse) collapse.addEventListener("click", () => {
+    const panel = document.getElementById("map-filters");
+    if (!panel) return;
+    const isCollapsed = panel.classList.toggle("collapsed");
+    collapse.setAttribute("aria-expanded", String(!isCollapsed));
+  });
+
+  if (reset) reset.addEventListener("click", _onWidgetReset);
+  if (toptg) toptg.addEventListener("click", toggleOnlyTop);
+}
+
+function hydrateWidgetsFromPlan(plan) {
+  // Reset widgetFilters to what the LLM extracted so the panel's visual
+  // state always mirrors the last backend plan. Any in-flight user edits
+  // that are waiting on the debounce timer are discarded — intentionally.
+  const soft = (plan && plan.soft_preferences) || {};
+  const near = Array.isArray(soft.near_landmark) ? soft.near_landmark.slice() : [];
+
+  // A query like "near zurich hb" almost always extracts as soft.commute_target
+  // rather than soft.near_landmark. Both signals point to the same landmark
+  // key, so auto-promote commute_target into a chip if the user hasn't
+  // already named that landmark explicitly. This way the REFINE panel shows
+  // a visible chip AND the corresponding landmark pin glows "active",
+  // without the user having to right-click the map.
+  if (soft.commute_target) {
+    const ct = soft.commute_target;
+    const marker = MAP_STATE.landmarkMarkersByKey.get(ct);
+    const displayName = marker?._landmark?.name || ct.replace(/_/g, " ");
+    if (!marker) {
+      // Landmarks may not have loaded yet (first paint race) or ct may be a
+      // key we don't ship (landmarks.json drift). Either way we still get
+      // a chip onto the panel; _upgradeLandmarkChipNames will revisit once
+      // /landmarks returns. Announce the fallback so we can spot truly
+      // unknown keys in the console.
+      console.info(
+        `[INFO] hydrate_commute_target: expected=marker for ct='${ct}', ` +
+          `got=not-loaded-or-unknown, fallback='${displayName}' chip text`,
+      );
+    }
+    const alreadyPresent =
+      (marker && !!_landmarkMatchesAny(marker._landmark, near)) ||
+      near.some((n) => _slugEq(n, displayName));
+    if (!alreadyPresent) near.push(displayName);
+  }
+
+  MAP_STATE.widgetFilters = {
+    min_price:       plan?.min_price ?? null,
+    max_price:       plan?.max_price ?? null,
+    min_rooms:       plan?.min_rooms ?? null,
+    max_rooms:       plan?.max_rooms ?? null,
+    min_area:        plan?.min_area ?? null,
+    max_area:        plan?.max_area ?? null,
+    bathroom_shared: plan?.bathroom_shared ?? null,
+    kitchen_shared:  plan?.kitchen_shared ?? null,
+    has_cellar:      plan?.has_cellar ?? null,
+    near_landmark:   near,
+  };
+  // Response reflects the merged plan the server actually ran with, so
+  // any "dirty" user edits we had queued are now accounted for. Clear
+  // the flag — the next user click will re-dirty it.
+  MAP_STATE.landmarkListDirty = false;
+  _renderWidgetPanel();
+  _syncLandmarkActiveStates();
+}
+
+function _renderWidgetPanel() {
+  const f = MAP_STATE.widgetFilters;
+  const priceMin = document.getElementById("mf-price-min");
+  const priceMax = document.getElementById("mf-price-max");
+  const rangeMin = document.getElementById("mf-price-range-min");
+  const rangeMax = document.getElementById("mf-price-range-max");
+  const roomsMin = document.getElementById("mf-rooms-min");
+  const roomsMax = document.getElementById("mf-rooms-max");
+  const areaMin  = document.getElementById("mf-area-min");
+  const areaMax  = document.getElementById("mf-area-max");
+  const areaRangeMin = document.getElementById("mf-area-range-min");
+  const areaRangeMax = document.getElementById("mf-area-range-max");
+  if (priceMin) priceMin.value = f.min_price != null ? String(f.min_price) : "";
+  if (priceMax) priceMax.value = f.max_price != null ? String(f.max_price) : "";
+  if (rangeMin) rangeMin.value = String(f.min_price ?? 0);
+  if (rangeMax) rangeMax.value = String(f.max_price ?? _PRICE_RANGE_MAX);
+  if (roomsMin) roomsMin.value = f.min_rooms != null ? String(f.min_rooms) : "";
+  if (roomsMax) roomsMax.value = f.max_rooms != null ? String(f.max_rooms) : "";
+  if (areaMin)  areaMin.value  = f.min_area != null ? String(f.min_area) : "";
+  if (areaMax)  areaMax.value  = f.max_area != null ? String(f.max_area) : "";
+  if (areaRangeMin) areaRangeMin.value = String(Math.min(f.min_area ?? 0, _AREA_RANGE_MAX));
+  if (areaRangeMax) areaRangeMax.value = String(Math.min(f.max_area ?? _AREA_RANGE_MAX, _AREA_RANGE_MAX));
+  _updatePriceRangeFill();
+  _updateAreaRangeFill();
+  _renderFeatureToggles();
+  _renderLandmarkChips();
+}
+
+function _updatePriceRangeFill() {
+  const fill = document.getElementById("mf-price-range-fill");
+  if (!fill) return;
+  const f = MAP_STATE.widgetFilters;
+  const lo = Math.min(f.min_price ?? 0, _PRICE_RANGE_MAX);
+  const hi = Math.min(f.max_price ?? _PRICE_RANGE_MAX, _PRICE_RANGE_MAX);
+  const leftPct  = Math.max(0, (lo / _PRICE_RANGE_MAX) * 100);
+  const rightPct = Math.max(0, (hi / _PRICE_RANGE_MAX) * 100);
+  fill.style.left  = `${leftPct}%`;
+  fill.style.width = `${Math.max(0, rightPct - leftPct)}%`;
+}
+
+function _updateAreaRangeFill() {
+  const fill = document.getElementById("mf-area-range-fill");
+  if (!fill) return;
+  const f = MAP_STATE.widgetFilters;
+  const lo = Math.min(f.min_area ?? 0, _AREA_RANGE_MAX);
+  const hi = Math.min(f.max_area ?? _AREA_RANGE_MAX, _AREA_RANGE_MAX);
+  const leftPct  = Math.max(0, (lo / _AREA_RANGE_MAX) * 100);
+  const rightPct = Math.max(0, (hi / _AREA_RANGE_MAX) * 100);
+  fill.style.left  = `${leftPct}%`;
+  fill.style.width = `${Math.max(0, rightPct - leftPct)}%`;
+}
+
+function _renderFeatureToggles() {
+  const f = MAP_STATE.widgetFilters;
+  document.querySelectorAll(".mf-toggle[data-field]").forEach((btn) => {
+    const field = btn.dataset.field;
+    const val = f[field];
+    // Tri-state: null=any (default), true=require, false=exclude
+    let ap = "false";
+    if (val === true) ap = "true";
+    else if (val === false) ap = "mixed";
+    btn.setAttribute("aria-pressed", ap);
+  });
+}
+
+function _renderLandmarkChips() {
+  const wrap = document.getElementById("mf-landmarks-list");
+  if (!wrap) return;
+  const names = MAP_STATE.widgetFilters.near_landmark || [];
+  if (!names.length) {
+    wrap.innerHTML = `<span class="mf-hint">Right-click a landmark on the map to add it here.</span>`;
+    return;
+  }
+  wrap.innerHTML = names
+    .map(
+      (name, i) => `
+      <span class="mf-landmark-chip" data-idx="${i}">
+        ${esc(name)}
+        <button type="button" class="mf-landmark-chip-remove"
+                aria-label="Remove ${esc(name)}">×</button>
+      </span>`,
+    )
+    .join("");
+  wrap.querySelectorAll(".mf-landmark-chip-remove").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      const chip = ev.target.closest(".mf-landmark-chip");
+      const idx = chip ? parseInt(chip.dataset.idx, 10) : -1;
+      if (Number.isFinite(idx) && idx >= 0) {
+        const removed = MAP_STATE.widgetFilters.near_landmark[idx];
+        MAP_STATE.widgetFilters.near_landmark.splice(idx, 1);
+        MAP_STATE.landmarkListDirty = true;
+        _renderLandmarkChips();
+        // Un-glow the corresponding map pin via alias-aware lookup.
+        if (removed) {
+          const lmEntry = Array.from(MAP_STATE.landmarkMarkersByKey.entries())
+            .find(([k, m]) => !!_landmarkMatchesAny(m._landmark, [removed]));
+          if (lmEntry) _setLandmarkPinActive(lmEntry[0], false);
+        }
+        _scheduleWidgetResubmit();
+      }
+    });
+  });
+}
+
+function _syncLandmarkActiveStates() {
+  const names = MAP_STATE.widgetFilters.near_landmark || [];
+  MAP_STATE.landmarkMarkersByKey.forEach((m, key) => {
+    const matched = _landmarkMatchesAny(m._landmark, names);
+    _setLandmarkPinActive(key, !!matched);
+  });
+}
+
+// ---- Widget input handlers ----------------------------------------------
+
+function _clampPrice(n) {
+  if (n == null || !Number.isFinite(n)) return null;
+  const v = Math.max(0, Math.min(30000, Math.round(n)));
+  return v;
+}
+
+function _clampRooms(n) {
+  if (n == null || !Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(15, n));
+}
+
+function _onPriceMinInput(ev) {
+  const v = ev.target.value.trim() === "" ? null : _clampPrice(Number(ev.target.value));
+  MAP_STATE.widgetFilters.min_price = v;
+  const rangeMin = document.getElementById("mf-price-range-min");
+  if (rangeMin) rangeMin.value = String(Math.min(v ?? 0, _PRICE_RANGE_MAX));
+  _updatePriceRangeFill();
+  _scheduleWidgetResubmit();
+}
+
+function _onPriceMaxInput(ev) {
+  const v = ev.target.value.trim() === "" ? null : _clampPrice(Number(ev.target.value));
+  MAP_STATE.widgetFilters.max_price = v;
+  const rangeMax = document.getElementById("mf-price-range-max");
+  if (rangeMax) rangeMax.value = String(Math.min(v ?? _PRICE_RANGE_MAX, _PRICE_RANGE_MAX));
+  _updatePriceRangeFill();
+  _scheduleWidgetResubmit();
+}
+
+function _onRangeMinInput(ev) {
+  let v = Number(ev.target.value);
+  // Clamp min to stay ≤ max-100.
+  const max = MAP_STATE.widgetFilters.max_price ?? _PRICE_RANGE_MAX;
+  if (v >= max) v = Math.max(0, max - 100);
+  MAP_STATE.widgetFilters.min_price = v === 0 ? null : v;
+  const priceMin = document.getElementById("mf-price-min");
+  if (priceMin) priceMin.value = v === 0 ? "" : String(v);
+  _updatePriceRangeFill();
+  _scheduleWidgetResubmit();
+}
+
+function _onRangeMaxInput(ev) {
+  let v = Number(ev.target.value);
+  const min = MAP_STATE.widgetFilters.min_price ?? 0;
+  if (v <= min) v = Math.min(_PRICE_RANGE_MAX, min + 100);
+  MAP_STATE.widgetFilters.max_price = v === _PRICE_RANGE_MAX ? null : v;
+  const priceMax = document.getElementById("mf-price-max");
+  if (priceMax) priceMax.value = v === _PRICE_RANGE_MAX ? "" : String(v);
+  _updatePriceRangeFill();
+  _scheduleWidgetResubmit();
+}
+
+function _onRoomsMinInput(ev) {
+  const raw = ev.target.value.trim();
+  MAP_STATE.widgetFilters.min_rooms = raw === "" ? null : _clampRooms(Number(raw));
+  _scheduleWidgetResubmit();
+}
+
+function _onRoomsMaxInput(ev) {
+  const raw = ev.target.value.trim();
+  MAP_STATE.widgetFilters.max_rooms = raw === "" ? null : _clampRooms(Number(raw));
+  _scheduleWidgetResubmit();
+}
+
+function _clampArea(n) {
+  if (n == null || !Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(1500, Math.round(n)));
+}
+
+function _onAreaMinInput(ev) {
+  const v = ev.target.value.trim() === "" ? null : _clampArea(Number(ev.target.value));
+  MAP_STATE.widgetFilters.min_area = v;
+  const rangeMin = document.getElementById("mf-area-range-min");
+  if (rangeMin) rangeMin.value = String(Math.min(v ?? 0, _AREA_RANGE_MAX));
+  _updateAreaRangeFill();
+  _scheduleWidgetResubmit();
+}
+
+function _onAreaMaxInput(ev) {
+  const v = ev.target.value.trim() === "" ? null : _clampArea(Number(ev.target.value));
+  MAP_STATE.widgetFilters.max_area = v;
+  const rangeMax = document.getElementById("mf-area-range-max");
+  if (rangeMax) rangeMax.value = String(Math.min(v ?? _AREA_RANGE_MAX, _AREA_RANGE_MAX));
+  _updateAreaRangeFill();
+  _scheduleWidgetResubmit();
+}
+
+function _onAreaRangeMinInput(ev) {
+  let v = Number(ev.target.value);
+  const max = MAP_STATE.widgetFilters.max_area ?? _AREA_RANGE_MAX;
+  if (v >= max) v = Math.max(0, max - 5);
+  MAP_STATE.widgetFilters.min_area = v === 0 ? null : v;
+  const areaMin = document.getElementById("mf-area-min");
+  if (areaMin) areaMin.value = v === 0 ? "" : String(v);
+  _updateAreaRangeFill();
+  _scheduleWidgetResubmit();
+}
+
+function _onAreaRangeMaxInput(ev) {
+  let v = Number(ev.target.value);
+  const min = MAP_STATE.widgetFilters.min_area ?? 0;
+  if (v <= min) v = Math.min(_AREA_RANGE_MAX, min + 5);
+  MAP_STATE.widgetFilters.max_area = v === _AREA_RANGE_MAX ? null : v;
+  const areaMax = document.getElementById("mf-area-max");
+  if (areaMax) areaMax.value = v === _AREA_RANGE_MAX ? "" : String(v);
+  _updateAreaRangeFill();
+  _scheduleWidgetResubmit();
+}
+
+function _onToggleClick(btn) {
+  const field = btn.dataset.field;
+  if (!field) return;
+  const current = MAP_STATE.widgetFilters[field];
+  // Cycle: null -> true -> false -> null
+  let next;
+  if (current === null || current === undefined) next = true;
+  else if (current === true) next = false;
+  else next = null;
+  MAP_STATE.widgetFilters[field] = next;
+  _renderFeatureToggles();
+  _scheduleWidgetResubmit();
+}
+
+function _onWidgetReset() {
+  MAP_STATE.widgetFilters = {
+    min_price: null,
+    max_price: null,
+    min_rooms: null,
+    max_rooms: null,
+    min_area: null,
+    max_area: null,
+    bathroom_shared: null,
+    kitchen_shared: null,
+    has_cellar: null,
+    near_landmark: [],
+  };
+  // User explicitly cleared the list — send [] in the next override so the
+  // backend doesn't silently re-add LLM-inferred landmarks.
+  MAP_STATE.landmarkListDirty = true;
+  _renderWidgetPanel();
+  _syncLandmarkActiveStates();
+  _scheduleWidgetResubmit();
+}
+
+// ---- Debounced widget resubmit ------------------------------------------
+
+function _scheduleWidgetResubmit() {
+  _setMfStatus("pending…", "is-loading");
+  if (MAP_STATE.widgetDebounceTimer) {
+    clearTimeout(MAP_STATE.widgetDebounceTimer);
+  }
+  MAP_STATE.widgetDebounceTimer = setTimeout(() => {
+    MAP_STATE.widgetDebounceTimer = null;
+    resubmitSearchWithWidgets();
+  }, _WIDGET_DEBOUNCE_MS);
+}
+
+function _buildOverridePayload() {
+  const f = MAP_STATE.widgetFilters;
+  // Null fields are omitted so the backend's merge defers to the LLM. The
+  // landmark list is the one exception: if the user has touched it since
+  // the last hydration (chip removed / reset) we always send it — including
+  // an empty array — so the backend doesn't re-inject the LLM's inference.
+  const out = {};
+  if (f.min_price       != null) out.min_price       = f.min_price;
+  if (f.max_price       != null) out.max_price       = f.max_price;
+  if (f.min_rooms       != null) out.min_rooms       = f.min_rooms;
+  if (f.max_rooms       != null) out.max_rooms       = f.max_rooms;
+  if (f.min_area        != null) out.min_area        = f.min_area;
+  if (f.max_area        != null) out.max_area        = f.max_area;
+  if (f.bathroom_shared != null) out.bathroom_shared = f.bathroom_shared;
+  if (f.kitchen_shared  != null) out.kitchen_shared  = f.kitchen_shared;
+  if (f.has_cellar      != null) out.has_cellar      = f.has_cellar;
+  if (MAP_STATE.landmarkListDirty || (f.near_landmark && f.near_landmark.length)) {
+    out.soft_preferences = { near_landmark: f.near_landmark || [] };
+  }
+  return out;
+}
+
+async function resubmitSearchWithWidgets() {
+  // Gate: no active text query yet -> the panel is inert; the user needs to
+  // submit the search bar once first. Still run the /listings/map overlay
+  // so the map can show pure hard-filter results without any text ranking.
+  const q = MAP_STATE.lastQueryText || "";
+  const override = _buildOverridePayload();
+  if (!q && Object.keys(override).length === 0) {
+    _setMfStatus("", "");
+    return;
+  }
+  const myToken = ++MAP_STATE.widgetSubmitToken;
+  try {
+    // Main ranked list re-issue. Preserves the LLM-extracted plan via the
+    // backend merge (non-null override fields win).
+    if (q) {
+      const fd = new FormData();
+      fd.append("query", q);
+      fd.append("limit", "25");
+      fd.append("offset", "0");
+      fd.append("personalize",
+        (authState.user && els.personalizeToggle?.checked) ? "true" : "false");
+      fd.append("hard_filters_override", JSON.stringify(override));
+      const r = await fetch("/listings/search/multi", {
+        method: "POST",
+        body: fd,
+        credentials: "same-origin",
+      });
+      if (!r.ok) {
+        throw new Error(`status=${r.status}`);
+      }
+      const data = await r.json();
+      if (myToken !== MAP_STATE.widgetSubmitToken) return;   // stale
+      _applySearchResponse(data, { fromWidget: true });
+      return;
+    }
+    // No text — fall back to map-only refresh using the override as hard filters.
+    const mapBody = Object.keys(override).length
+      ? { hard_filters: override }
+      : null;
+    if (mapBody) await fetchAndRenderMap(mapBody, new Set());
+    _setMfStatus(
+      Object.keys(override).length
+        ? `${Object.keys(override).length} filter${Object.keys(override).length === 1 ? "" : "s"} applied`
+        : "",
+      "",
+    );
+  } catch (e) {
+    console.warn(
+      `[WARN] resubmit_widgets_failed: expected=200 from /listings/search/multi, ` +
+        `got=${e.message}, fallback=leave current results`,
+    );
+    _setMfStatus("re-run failed — check console", "is-error");
+  }
+}
+
+function _setMfStatus(text, cls) {
+  const el = document.getElementById("mf-status");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = `mf-status ${cls || ""}`.trim();
 }
 
 // ---------- Pass-2b display helpers ---------------------------------------
@@ -3000,6 +3782,16 @@ async function runQuery(query, limit) {
   els.listings.innerHTML = "";
   els.resultStatus.textContent = "";
   els.metaPanel.hidden = true;
+  // Cancel any pending widget-driven resubmit before firing a fresh text
+  // search. Otherwise a debounce that the user kicked off ~300ms before
+  // hitting Enter would land AFTER this search and clobber the new plan.
+  if (MAP_STATE.widgetDebounceTimer) {
+    clearTimeout(MAP_STATE.widgetDebounceTimer);
+    MAP_STATE.widgetDebounceTimer = null;
+  }
+  // Bumping the token so any /listings/search/multi call still in flight
+  // from the widget path loses the stale race in _applySearchResponse.
+  MAP_STATE.widgetSubmitToken++;
 
   const personalize =
     !!(authState.user && els.personalizeToggle && els.personalizeToggle.checked);
@@ -3055,12 +3847,36 @@ async function runQuery(query, limit) {
     return;
   }
 
-  const n = data.listings?.length ?? 0;
-  setStatus(`Found ${n} home${n === 1 ? "" : "s"}`, "ok");
+  // Stash the text the user typed so widget-panel re-submits can preserve
+  // the full RRF ranking pipeline (backend re-runs the LLM extraction then
+  // merges widget-state on top). Empty string is fine — image-only queries
+  // won't trigger widget resubmits anyway.
+  MAP_STATE.lastQueryText = query || "";
+  _applySearchResponse(data, { fromWidget: false, fallbackQuery: query });
+}
 
+// ---------- Response handler (shared between form-submit + widget-resubmit) ---
+//
+// One funnel so every code path that receives a ListingsResponse renders the
+// same set of panels, feeds the map overlay with the right top-N set, and
+// hydrates the widget panel from the LLM's extracted plan. `opts.fromWidget`
+// distinguishes widget-driven resubmits so the status-bar message can say
+// "filters applied" instead of "Found N homes" (less noisy for small nudges).
+function _applySearchResponse(data, opts) {
+  opts = opts || {};
+  const n = data.listings?.length ?? 0;
   const meta = data.meta || {};
+  if (opts.fromWidget) {
+    _setMfStatus(
+      n === 0 ? "no homes match" : `${n} home${n === 1 ? "" : "s"} match`,
+      "",
+    );
+  } else {
+    setStatus(`Found ${n} home${n === 1 ? "" : "s"}`, "ok");
+  }
+
   els.metaPanel.hidden = false;
-  els.rawQuery.textContent = `"${meta.query ?? query}"`;
+  els.rawQuery.textContent = `"${meta.query ?? opts.fallbackQuery ?? ""}"`;
   renderHardFilters(meta.query_plan || null);
   renderSoftPrefs(meta.query_plan || null);
   renderPipeline(meta.pipeline, meta.candidate_pool_size, meta.returned);
@@ -3070,16 +3886,28 @@ async function runQuery(query, limit) {
   }
   renderListings(data.listings, meta);
 
-  // Map overlay: ask the server for every filter-matched (lat,lng) and plot
-  // them as a cluster. Reuses `meta.query_plan` (the HardFilters the LLM
-  // already extracted) so we don't pay for a second LLM round-trip.
+  // Map overlay: the top-N set is exactly the ranker's picks in data.listings,
+  // so the map can draw them as bright "top match" markers while the other
+  // filter-matched rows appear as faded dots. We reuse meta.query_plan as the
+  // hard_filters payload so the map's SQL filter matches the backend's.
+  const topIds = new Set(
+    (Array.isArray(data.listings) ? data.listings : []).map((l) => String(l.listing_id)),
+  );
   const plan = meta.query_plan;
   if (plan && typeof plan === "object") {
-    fetchAndRenderMap({ hard_filters: plan });
-  } else if (query) {
+    fetchAndRenderMap({ hard_filters: plan }, topIds);
+  } else if (opts.fallbackQuery) {
     // No plan emitted (image-only query) — fall back to the NL path so the
     // map at least shows corpus-wide coverage rather than going blank.
-    fetchAndRenderMap({ query });
+    fetchAndRenderMap({ query: opts.fallbackQuery }, topIds);
+  }
+
+  // Two-way bind the widget panel to the LLM's extraction. On widget-driven
+  // re-submits this overwrites the in-flight widget state with the merged
+  // plan coming back from the server — intentional, so the visible panel
+  // stays honest to what actually ran.
+  if (plan && typeof plan === "object") {
+    hydrateWidgetsFromPlan(plan);
   }
 }
 
@@ -3096,6 +3924,9 @@ function _wireMapTabsAndBoot() {
   if (listBtn) listBtn.addEventListener("click", () => setActiveView("list"));
   if (mapBtn) mapBtn.addEventListener("click", () => setActiveView("map"));
   _initMapOnce();
+  // Widget panel lives in #view-map but its DOM is parsed at page load, so
+  // the listener binding can happen even while the map tab is hidden.
+  _wireWidgetPanel();
 }
 
 if (document.readyState === "loading") {

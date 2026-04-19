@@ -309,22 +309,165 @@
           <div id="listings"></div>
         </section>
 
-        <!-- MAP VIEW. Full-height panel; Leaflet's tile container is the only
-             element that owns its own scroll/zoom, so no layout reflow leaks
-             to the topbar. Map is initialised lazily when this tab is first
-             shown — cheap idempotent call to _initMapOnce. -->
+        <!-- MAP VIEW. Full-height panel with three floating UI layers:
+             top-left = counter + area-pill + "only top" toggle,
+             right    = collapsible widget-filter drawer (price, shared
+                        kitchen/bath, has_cellar, active landmarks).
+             Leaflet's tile container owns the visual frame — every overlay
+             is position:absolute so the map animates without reflowing the
+             topbar. Map is initialised lazily when this tab is first shown. -->
         <section id="view-map" class="view view-map-pane"
                  role="tabpanel" aria-labelledby="view-tab-map" hidden>
           <div id="map" class="map"></div>
-          <!-- Floating overlay: counter + area-filter pill. Positioned over
-               the map (absolute) so the map itself owns the visual frame. -->
+
+          <!-- Floating overlay (top-left): compact status + in-area reset +
+               "only top matches" visibility toggle. The top toggle is a
+               pure client-side visibility filter — it doesn't re-issue a
+               search, just hides the non-ranker markers. -->
           <div class="map-floating-ui" role="group" aria-label="Map controls">
             <div class="map-counter-chip">
               <span class="map-counter-dot" aria-hidden="true"></span>
               <span id="map-counter">—</span>
             </div>
             <button type="button" class="map-area-pill" id="map-area-pill" hidden></button>
+            <button type="button"
+                    class="map-toptoggle"
+                    id="map-toptoggle"
+                    aria-pressed="false"
+                    title="Show only the top ranker matches"
+                    hidden>
+              <svg viewBox="0 0 24 24" width="14" height="14"
+                   fill="currentColor" aria-hidden="true">
+                <path d="M12 2l2.39 7.36H22l-6.19 4.5L18.2 21 12 16.5 5.8 21l2.39-7.14L2 9.36h7.61z"/>
+              </svg>
+              <span id="map-toptoggle-label">Only top matches</span>
+            </button>
           </div>
+
+          <!-- Widget-filter drawer. Two-way bound to the hard filters the LLM
+               extracts from the text query. Any change here debounces into a
+               full /listings/search/multi re-submit that merges the widget
+               state on top of the LLM's extraction, so users can refine
+               without re-typing. -->
+          <aside class="map-filters" id="map-filters" aria-label="Refine filters">
+            <header class="map-filters-head">
+              <span class="map-filters-title">
+                <svg viewBox="0 0 24 24" width="15" height="15"
+                     fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true">
+                  <line x1="4" y1="21" x2="4" y2="14"/>
+                  <line x1="4" y1="10" x2="4" y2="3"/>
+                  <line x1="12" y1="21" x2="12" y2="12"/>
+                  <line x1="12" y1="8" x2="12" y2="3"/>
+                  <line x1="20" y1="21" x2="20" y2="16"/>
+                  <line x1="20" y1="12" x2="20" y2="3"/>
+                  <line x1="1" y1="14" x2="7" y2="14"/>
+                  <line x1="9" y1="8" x2="15" y2="8"/>
+                  <line x1="17" y1="16" x2="23" y2="16"/>
+                </svg>
+                Refine
+              </span>
+              <button type="button" id="map-filters-collapse"
+                      class="map-filters-collapse"
+                      aria-expanded="true"
+                      title="Collapse filter panel">▾</button>
+            </header>
+            <div class="map-filters-body" id="map-filters-body">
+              <section class="mf-section">
+                <label class="mf-label">Price (CHF / month)</label>
+                <div class="mf-price-row">
+                  <input type="number" id="mf-price-min" class="mf-price-input"
+                         min="0" max="30000" step="100" placeholder="Min"
+                         inputmode="numeric" />
+                  <span class="mf-sep">—</span>
+                  <input type="number" id="mf-price-max" class="mf-price-input"
+                         min="0" max="30000" step="100" placeholder="Max"
+                         inputmode="numeric" />
+                </div>
+                <div class="mf-range-wrap">
+                  <input type="range" id="mf-price-range-min" class="mf-range"
+                         min="0" max="10000" step="100" value="0" />
+                  <input type="range" id="mf-price-range-max" class="mf-range"
+                         min="0" max="10000" step="100" value="10000" />
+                  <div class="mf-range-track" aria-hidden="true">
+                    <div class="mf-range-fill" id="mf-price-range-fill"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="mf-section">
+                <label class="mf-label">Rooms</label>
+                <div class="mf-price-row">
+                  <input type="number" id="mf-rooms-min" class="mf-price-input"
+                         min="0" max="15" step="0.5" placeholder="Min"
+                         inputmode="decimal" />
+                  <span class="mf-sep">—</span>
+                  <input type="number" id="mf-rooms-max" class="mf-price-input"
+                         min="0" max="15" step="0.5" placeholder="Max"
+                         inputmode="decimal" />
+                </div>
+              </section>
+
+              <section class="mf-section">
+                <label class="mf-label">Size (m²)</label>
+                <div class="mf-price-row">
+                  <input type="number" id="mf-area-min" class="mf-price-input"
+                         min="0" max="1500" step="5" placeholder="Min"
+                         inputmode="numeric" />
+                  <span class="mf-sep">—</span>
+                  <input type="number" id="mf-area-max" class="mf-price-input"
+                         min="0" max="1500" step="5" placeholder="Max"
+                         inputmode="numeric" />
+                </div>
+                <div class="mf-range-wrap">
+                  <input type="range" id="mf-area-range-min" class="mf-range"
+                         min="0" max="400" step="5" value="0" />
+                  <input type="range" id="mf-area-range-max" class="mf-range"
+                         min="0" max="400" step="5" value="400" />
+                  <div class="mf-range-track" aria-hidden="true">
+                    <div class="mf-range-fill" id="mf-area-range-fill"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="mf-section">
+                <label class="mf-label">Layout</label>
+                <div class="mf-toggles">
+                  <button type="button" class="mf-toggle"
+                          data-field="bathroom_shared" aria-pressed="false">
+                    <span class="mf-toggle-ico">🛁</span>
+                    <span class="mf-toggle-label">Shared bath</span>
+                  </button>
+                  <button type="button" class="mf-toggle"
+                          data-field="kitchen_shared" aria-pressed="false">
+                    <span class="mf-toggle-ico">🍳</span>
+                    <span class="mf-toggle-label">Shared kitchen</span>
+                  </button>
+                  <button type="button" class="mf-toggle"
+                          data-field="has_cellar" aria-pressed="false">
+                    <span class="mf-toggle-ico">🗝️</span>
+                    <span class="mf-toggle-label">Cellar</span>
+                  </button>
+                </div>
+                <p class="mf-hint">Click once to require, twice to exclude, thrice to reset.</p>
+              </section>
+
+              <section class="mf-section">
+                <label class="mf-label">Near landmarks</label>
+                <div class="mf-landmarks" id="mf-landmarks-list">
+                  <span class="mf-hint">Right-click a landmark on the map to add it here.</span>
+                </div>
+              </section>
+
+              <footer class="mf-footer">
+                <button type="button" id="mf-reset" class="mf-reset">
+                  Reset all filters
+                </button>
+                <span class="mf-status" id="mf-status"></span>
+              </footer>
+            </div>
+          </aside>
         </section>
       </section>
 

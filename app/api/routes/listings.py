@@ -26,6 +26,7 @@ from app.harness.search_service import (
     to_hard_filter_params,
 )
 from app.models.schemas import (
+    HardFilters,
     HealthResponse,
     ImageSearchResponse,
     LandmarkPoint,
@@ -167,6 +168,7 @@ def landmarks() -> list[LandmarkPoint]:
                 category=lm.kind,
                 lat=float(lm.lat),
                 lng=float(lm.lon),
+                aliases=list(lm.aliases),
             )
         )
     return out
@@ -263,6 +265,12 @@ async def listings_search_multi(
     limit: int = Form(default=25),
     offset: int = Form(default=0),
     personalize: bool = Form(default=True),
+    # Interactive-map widgets post-compute the filters the user dragged into
+    # place and attach them as a JSON-encoded HardFilters blob. Non-None
+    # override fields beat the LLM-extracted values; None defers to the LLM.
+    # Keeping it in the multipart form (not a JSON body) so the same request
+    # still supports image upload + text + override in a single round-trip.
+    hard_filters_override: str | None = Form(default=None),
     user: dict[str, Any] | None = Depends(get_current_user(required=False)),
 ) -> ListingsResponse:
     """Hybrid text + image search — one endpoint, three modes.
@@ -312,6 +320,27 @@ async def listings_search_multi(
     # channel then drives ranking via RRF.
     effective_query = q if q else ""
 
+    # Parse the optional widget-override payload. Bad JSON or a schema mismatch
+    # must NEVER silently drop the user's filter — announce the fallback so the
+    # client can surface "widget state was ignored" in a console warning.
+    override_obj: HardFilters | None = None
+    if hard_filters_override:
+        try:
+            import json as _json
+            payload = _json.loads(hard_filters_override)
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    f"expected top-level object, got {type(payload).__name__}"
+                )
+            override_obj = HardFilters(**payload)
+        except Exception as exc:
+            print(
+                f"[WARN] listings_search_multi: expected=valid "
+                f"hard_filters_override JSON, got={type(exc).__name__}: {exc}, "
+                f"fallback=ignore override, run with LLM filters only",
+                flush=True,
+            )
+
     settings = get_settings()
     user_id = int(user["id"]) if user is not None else None
     do_personalize = bool(personalize and user_id is not None)
@@ -323,6 +352,7 @@ async def listings_search_multi(
         user_id=user_id,
         personalize=do_personalize,
         users_db_path=settings.users_db_path,
+        hard_filters_override=override_obj,
         image_pil=image_pil,
     )
 

@@ -1249,44 +1249,74 @@ code {
   letter-spacing: 0.04em;
 }
 
-/* ----- Landmark pins (always-on curated layer) ------------------------ */
-.landmark-pin {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* "Top match" badge inside the listing tooltip (star icon rendered as text). */
+.listing-tooltip-inner .tt-top-badge {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f59e0b, #ea580c);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  box-shadow: 0 1px 2px rgba(120, 53, 15, 0.28);
 }
 
-.landmark-pin-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #2563eb;
-  box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 0.9),
-    0 1px 2px rgba(37, 99, 235, 0.3),
-    0 4px 10px rgba(37, 99, 235, 0.22);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+/* Landmark popup (shown on left-click). Leaflet's default popup chrome is
+   fine structurally; we just retheme content + typography. */
+.landmark-popup .leaflet-popup-content-wrapper {
+  border-radius: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08), 0 16px 36px rgba(0, 0, 0, 0.14);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 }
 
-.landmark-pin:hover .landmark-pin-dot {
-  transform: scale(1.35);
-  box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 1),
-    0 2px 4px rgba(37, 99, 235, 0.35),
-    0 8px 18px rgba(37, 99, 235, 0.3);
+.landmark-popup .leaflet-popup-content {
+  margin: 0;
+  font-family: inherit;
 }
 
-/* Palette derived from the 7 kinds actually present in data/ranking/landmarks.json
-   (cultural, employer, lake, neighborhood, oldtown, transit, university). Each
-   stays muted so the map doesn't turn into a rainbow. */
-.landmark-pin.landmark-university    .landmark-pin-dot { background: #4f46e5; }
-.landmark-pin.landmark-transit       .landmark-pin-dot { background: #334155; }
-.landmark-pin.landmark-lake          .landmark-pin-dot { background: #0891b2; }
-.landmark-pin.landmark-employer      .landmark-pin-dot { background: #db2777; }
-.landmark-pin.landmark-oldtown       .landmark-pin-dot { background: #a16207; }
-.landmark-pin.landmark-cultural      .landmark-pin-dot { background: #9333ea; }
-.landmark-pin.landmark-neighborhood  .landmark-pin-dot { background: #0d9488; }
+.landmark-popup-inner {
+  padding: 10px 14px 12px;
+  min-width: 160px;
+}
 
+.lp-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.lp-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: lowercase;
+  letter-spacing: 0.03em;
+}
+
+.lp-hint {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+}
+
+.lp-active {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1e40af;
+  font-weight: 500;
+  font-size: 11px;
+}
+
+/* ----- Landmark tooltip (styling inherited from the main block above;
+       the SVG-based landmark-pin rules moved into the "Landmark icons"
+       section later in this file so all landmark visuals stay together). */
 .landmark-tooltip {
   background: #1f2937 !important;
   color: #f9fafb !important;
@@ -1313,6 +1343,471 @@ code {
   to   { stroke-opacity: 0.45; fill-opacity: 0.08; }
 }
 
+/* ----- Top-matches marker (DivIcon with halo pulse) ------------------ */
+/* Small set (max 25 per search) rendered as HTML so we get proper gradients
+   + a subtle breathing halo. Non-top markers are canvas circleMarkers (fast
+   at 500+), see below. Separating top/non-top lets us keep the 12k-marker
+   canvas renderer happy while still making the ranker's picks pop. */
+.top-marker {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  pointer-events: auto;
+}
+
+.top-marker-halo {
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(245, 158, 11, 0.42) 0%,
+    rgba(245, 158, 11, 0.16) 45%,
+    transparent 75%
+  );
+  animation: top-halo-pulse 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.top-marker-core {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #fde68a 0%, #f59e0b 72%, #b45309 100%);
+  box-shadow:
+    0 0 0 2.5px #ffffff,
+    0 2px 3px rgba(120, 53, 15, 0.25),
+    0 6px 14px rgba(120, 53, 15, 0.2);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.top-marker:hover .top-marker-core {
+  transform: scale(1.18);
+  box-shadow:
+    0 0 0 2.5px #ffffff,
+    0 3px 5px rgba(120, 53, 15, 0.32),
+    0 10px 22px rgba(120, 53, 15, 0.28);
+}
+
+@keyframes top-halo-pulse {
+  0%, 100% { transform: scale(0.88); opacity: 0.75; }
+  50%      { transform: scale(1.28); opacity: 0.35; }
+}
+
+/* Non-top canvas markers don't get per-marker CSS; their style is set in
+   JS via L.circleMarker options. We only keep .listing-dot as a hook for
+   the "faded/non-top" visual regime during hover, which we handle in JS. */
+
+/* ----- "Only top" visibility toggle ------------------------------------ */
+.map-toptoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px 6px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.95);
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: transform 0.1s ease, background 0.15s ease, color 0.15s ease,
+              box-shadow 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 16px rgba(0, 0, 0, 0.06);
+  pointer-events: auto;
+  animation: float-ui-in 0.35s ease-out;
+}
+
+.map-toptoggle:hover {
+  background: #fff7ed;
+  color: #b45309;
+  transform: translateY(-1px);
+}
+
+.map-toptoggle[aria-pressed="true"] {
+  background: #f59e0b;
+  color: #ffffff;
+  border-color: #b45309;
+  box-shadow:
+    0 0 0 3px rgba(245, 158, 11, 0.22),
+    0 2px 4px rgba(120, 53, 15, 0.3),
+    0 8px 18px rgba(120, 53, 15, 0.18);
+}
+
+.map-toptoggle[aria-pressed="true"]:hover {
+  background: #ea580c;
+  color: #ffffff;
+}
+
+.map-toptoggle svg { flex-shrink: 0; }
+
+/* ----- Widget-filter drawer ------------------------------------------- */
+.map-filters {
+  position: absolute;
+  top: 14px;
+  right: 58px;                 /* left of zoom + recenter controls */
+  z-index: 450;                /* under popups (700), above floating-ui (500 uses top-left side) */
+  width: 268px;
+  max-height: calc(100% - 28px);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 10px 30px rgba(0, 0, 0, 0.08),
+    0 24px 48px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: float-ui-in 0.4s ease-out;
+}
+
+.map-filters-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8) 0%, transparent 100%);
+}
+
+.map-filters-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+
+.map-filters-title svg { color: #b45309; }
+
+.map-filters-collapse {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.2s ease;
+}
+
+.map-filters-collapse:hover {
+  background: #f3f4f6;
+  color: var(--ink);
+}
+
+/* Collapsed state: the body hides, the caret flips. Root keeps its width
+   while collapsed so the animation has a stable anchor. */
+.map-filters.collapsed .map-filters-body { display: none; }
+.map-filters.collapsed .map-filters-collapse { transform: rotate(-90deg); }
+
+.map-filters-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.mf-section { display: flex; flex-direction: column; gap: 7px; }
+
+.mf-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.mf-price-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mf-price-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mf-price-input:focus {
+  outline: none;
+  border-color: #fbbf24;
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.2);
+}
+
+.mf-sep { color: var(--muted); font-size: 11px; }
+
+/* Dual range slider: two native inputs stacked on the same track; their
+   thumbs are the only visible bits. The fill bar between them is a
+   decorative div driven by JS. */
+.mf-range-wrap {
+  position: relative;
+  height: 24px;
+  padding: 0 6px;
+  margin-top: 4px;
+}
+
+.mf-range-track {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 11px;
+  height: 3px;
+  border-radius: 2px;
+  background: #e5e7eb;
+  pointer-events: none;
+}
+
+.mf-range-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #fbbf24, #f59e0b);
+  transition: left 0.08s ease, width 0.08s ease;
+}
+
+.mf-range {
+  -webkit-appearance: none;
+  appearance: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  width: 100%;
+  height: 24px;
+  background: transparent;
+  pointer-events: none;      /* re-enabled on the thumb only */
+  margin: 0;
+}
+
+.mf-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #f59e0b;
+  box-shadow: 0 1px 2px rgba(120, 53, 15, 0.25), 0 3px 6px rgba(120, 53, 15, 0.12);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.mf-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 2px 3px rgba(120, 53, 15, 0.3), 0 6px 10px rgba(120, 53, 15, 0.2);
+}
+
+.mf-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #f59e0b;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.mf-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.mf-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+              transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+.mf-toggle:hover {
+  background: #fff7ed;
+  border-color: #fcd6b4;
+  transform: translateY(-1px);
+}
+
+/* Tri-state via aria-pressed: "true" = require, "mixed" = exclude. */
+.mf-toggle[aria-pressed="true"] {
+  background: #fcd34d;
+  color: #78350f;
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+}
+
+.mf-toggle[aria-pressed="mixed"] {
+  background: #e5e7eb;
+  color: #6b7280;
+  border-color: #9ca3af;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.mf-toggle-ico { font-size: 13px; line-height: 1; }
+
+.mf-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.mf-landmarks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.mf-landmark-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 5px 4px 9px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 11.5px;
+  font-weight: 500;
+  border: 1px solid #bfdbfe;
+  animation: float-ui-in 0.25s ease-out;
+}
+
+.mf-landmark-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  border: 0;
+  color: #1e40af;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.mf-landmark-chip-remove:hover {
+  background: rgba(30, 64, 175, 0.12);
+  color: #1e3a8a;
+}
+
+.mf-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.06);
+}
+
+.mf-reset {
+  padding: 6px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.mf-reset:hover {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+.mf-status {
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-height: 14px;
+}
+
+.mf-status.is-loading { color: #b45309; }
+.mf-status.is-error { color: #b91c1c; }
+
+/* ----- Landmark icons (category-specific SVG inside DivIcon) ---------- */
+.landmark-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1.5px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.12),
+    0 3px 8px rgba(0, 0, 0, 0.08);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  cursor: pointer;
+}
+
+.landmark-pin svg {
+  width: 14px;
+  height: 14px;
+  color: #1e40af;            /* default; overridden per category below */
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.landmark-pin:hover {
+  transform: scale(1.22);
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.14),
+    0 8px 18px rgba(0, 0, 0, 0.14);
+  z-index: 999 !important;   /* over neighbouring pins during hover */
+}
+
+.landmark-pin.landmark-is-active {
+  border-color: #1e40af;
+  box-shadow:
+    0 0 0 3px rgba(30, 64, 175, 0.25),
+    0 2px 4px rgba(0, 0, 0, 0.14),
+    0 8px 18px rgba(30, 64, 175, 0.2);
+}
+
+/* Category tinting: icon colour + subtle pin-background tint. */
+.landmark-pin.landmark-university  svg { color: #4f46e5; }
+.landmark-pin.landmark-transit     svg { color: #334155; }
+.landmark-pin.landmark-lake        svg { color: #0891b2; }
+.landmark-pin.landmark-employer    svg { color: #db2777; }
+.landmark-pin.landmark-oldtown     svg { color: #a16207; }
+.landmark-pin.landmark-cultural    svg { color: #9333ea; }
+.landmark-pin.landmark-neighborhood svg { color: #0d9488; }
+
+/* Legacy round-dot rule removed — every landmark now ships a category SVG. */
+
 /* ----- Card pulse (marker click highlight) ---------------------------- */
 @keyframes listing-card-pulse {
   0%   { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.65); }
@@ -1322,6 +1817,18 @@ code {
 
 .listing-card.pulse {
   animation: listing-card-pulse 1.4s ease-out;
+}
+
+/* ----- Responsive: collapse the filter drawer on narrow screens -------- */
+@media (max-width: 720px) {
+  .map-filters {
+    top: auto;
+    bottom: 14px;
+    right: 14px;
+    left: 14px;
+    width: auto;
+    max-height: 48vh;
+  }
 }
 
 /* ----- Pass-2b chips (bathroom / cellar / kitchen) ---------------------- */

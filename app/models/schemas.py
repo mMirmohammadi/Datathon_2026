@@ -297,6 +297,10 @@ class LandmarkPoint(BaseModel):
     that the map always renders so the user has geographical anchors while
     panning. Distinct from MapPoint — listings come and go with each query,
     landmarks are persistent.
+
+    ``aliases`` ships the same list the LLM sees (``"ETH"``, ``"ETH Zürich"``,
+    ``"ETHZ"``, …) so the frontend can cross-match a user-typed "near X"
+    chip against the landmark's known aliases without a second round-trip.
     """
 
     key: str
@@ -304,6 +308,7 @@ class LandmarkPoint(BaseModel):
     category: str
     lat: float
     lng: float
+    aliases: list[str] = Field(default_factory=list)
 
 
 class ListingsMapRequest(BaseModel):
