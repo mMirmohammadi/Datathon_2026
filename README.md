@@ -70,7 +70,8 @@ cd Datathon_2026
 cp .env.example .env            # fill in your API keys
 uv sync --group image_search    # ~1 GB torch + transformers
 
-# Get the pre-built dataset bundle (fastest path — see docs/DATASET.md):
+# Get the pre-built dataset bundle (~2.5 GB, see docs/DATASET.md):
+uv run --with gdown gdown 1rxYd17eX7C99AgNVlJft1QIFGtwogxX8 -O datathon2026_dataset.zip
 unzip datathon2026_dataset.zip  # into the repo root
 
 uv run uvicorn app.main:app --reload

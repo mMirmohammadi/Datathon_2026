@@ -105,8 +105,13 @@ Two paths — pick one.
 
 The team ships a ~2.5 GB zip with the fully built DB + embeddings + landmarks.
 
+**Download** — [Google Drive link](https://drive.google.com/file/d/1rxYd17eX7C99AgNVlJft1QIFGtwogxX8/view?usp=sharing) — or from the CLI:
+
 ```bash
-# unzip at repo root — paths inside the zip are already repo-relative
+# fetch (~2.5 GB) — gdown handles Drive's large-file confirm step
+uv run --with gdown gdown 1rxYd17eX7C99AgNVlJft1QIFGtwogxX8 -O datathon2026_dataset.zip
+
+# extract at repo root — paths inside the zip are already repo-relative
 unzip datathon2026_dataset.zip
 ```
 

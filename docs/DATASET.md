@@ -4,6 +4,18 @@ Pre-built runtime artifacts — DB, embeddings, landmarks — so you don't have 
 
 ---
 
+## Download
+
+**🔗 [datathon2026_dataset.zip (~2.5 GB) — Google Drive](https://drive.google.com/file/d/1rxYd17eX7C99AgNVlJft1QIFGtwogxX8/view?usp=sharing)**
+
+CLI (handles Drive's large-file confirm step automatically):
+
+```bash
+uv run --with gdown gdown 1rxYd17eX7C99AgNVlJft1QIFGtwogxX8 -O datathon2026_dataset.zip
+```
+
+---
+
 ## Install
 
 ```bash
