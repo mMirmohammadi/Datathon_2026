@@ -15,18 +15,115 @@
             <h1>Listings Search — Live Demo</h1>
             <p class="muted small">
               Swiss real-estate hybrid retrieval · hard filters × BM25 × (optional) SigLIP-2 × Arctic-Embed × soft-signal rankings × RRF
+              <span id="mem-indicator" class="mem-indicator" hidden>· memory personalization</span>
             </p>
           </div>
         </div>
-        <div class="status" id="status"></div>
+        <div class="topbar-right">
+          <div class="auth-widget" id="auth-widget">
+            <div class="auth-anon" id="auth-anon">
+              <button type="button" class="auth-btn" data-auth-open="login">Sign in</button>
+              <button type="button" class="auth-btn primary" data-auth-open="register">Create account</button>
+            </div>
+            <div class="auth-user" id="auth-user" hidden>
+              <span class="auth-user-name" id="auth-username">—</span>
+              <label class="personalize-toggle" title="Toggle memory-based personalization for this query">
+                <input type="checkbox" id="personalize-toggle" checked />
+                <span>Personalize</span>
+              </label>
+              <button type="button" class="auth-btn" id="favorites-btn" title="Open your saved (bookmarked) listings">Saved (<span id="favorites-count">0</span>)</button>
+              <button type="button" class="auth-btn" data-auth-open="account">Account</button>
+              <button type="button" class="auth-btn" id="logout-btn">Sign out</button>
+            </div>
+            <div class="status" id="status"></div>
+          </div>
+        </div>
       </div>
     </header>
+
+    <!-- Auth / account modal. Re-used for login, register, and account mgmt. -->
+    <dialog id="auth-modal" class="modal" aria-labelledby="auth-modal-title">
+      <form method="dialog" class="modal-inner" id="auth-modal-form">
+        <header class="modal-head">
+          <h2 id="auth-modal-title">Sign in</h2>
+          <button type="button" class="modal-close" aria-label="Close" data-auth-close>×</button>
+        </header>
+        <div class="modal-error" id="auth-error" hidden></div>
+
+        <div class="modal-tabs" id="auth-tabs">
+          <button type="button" class="tab" data-auth-mode="login">Sign in</button>
+          <button type="button" class="tab" data-auth-mode="register">Create account</button>
+        </div>
+
+        <div class="modal-body">
+          <!-- Login / Register fields -->
+          <div class="auth-field" data-auth-field="username">
+            <label for="auth-username-input">Username</label>
+            <input id="auth-username-input" name="username" type="text" autocomplete="username" maxlength="32" required />
+            <p class="muted small">3–32 chars: letters, digits, <code>_</code>, <code>.</code>, <code>-</code></p>
+          </div>
+          <div class="auth-field" data-auth-field="email" hidden>
+            <label for="auth-email-input">Email</label>
+            <input id="auth-email-input" name="email" type="email" autocomplete="email" required />
+          </div>
+          <div class="auth-field" data-auth-field="password">
+            <label for="auth-password-input">Password</label>
+            <input id="auth-password-input" name="password" type="password" autocomplete="current-password" required />
+            <p class="muted small" data-auth-field="password-hint" hidden>≥ 8 chars, at least one letter and one digit.</p>
+          </div>
+          <div class="auth-field" data-auth-field="new-password" hidden>
+            <label for="auth-new-password-input">New password</label>
+            <input id="auth-new-password-input" name="new_password" type="password" autocomplete="new-password" />
+            <p class="muted small">≥ 8 chars, at least one letter and one digit.</p>
+          </div>
+
+          <!-- Account management section (only in account mode) -->
+          <div class="auth-field account-section" data-auth-field="account-actions" hidden>
+            <button type="button" class="auth-btn danger" id="delete-account-btn">Delete account…</button>
+            <p class="muted small">Deleting your account also wipes all your saved listings and interaction history.</p>
+          </div>
+        </div>
+
+        <footer class="modal-foot">
+          <button type="submit" class="auth-btn primary" id="auth-submit">Sign in</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <!-- Saved-listings drawer -->
+    <dialog id="favorites-modal" class="modal" aria-labelledby="favorites-modal-title">
+      <div class="modal-inner">
+        <header class="modal-head">
+          <h2 id="favorites-modal-title">Saved listings</h2>
+          <button type="button" class="modal-close" aria-label="Close" data-fav-close>×</button>
+        </header>
+        <div class="modal-body" id="favorites-list">
+          <p class="muted">No saved listings yet.</p>
+        </div>
+        <footer class="modal-foot">
+          <button type="button" class="auth-btn danger" id="clear-history-btn">Clear interaction history…</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <!-- Listing-detail modal. Stacks on top of the Saved drawer so closing it
+         returns the user to their list. -->
+    <dialog id="listing-detail-modal" class="modal listing-detail-modal" aria-labelledby="listing-detail-title">
+      <div class="modal-inner">
+        <header class="modal-head">
+          <h2 id="listing-detail-title">Listing</h2>
+          <button type="button" class="modal-close" aria-label="Close" data-detail-close>×</button>
+        </header>
+        <div class="modal-body" id="listing-detail-body">
+          <p class="muted">Loading…</p>
+        </div>
+      </div>
+    </dialog>
 
     <section class="search-panel">
       <form id="search-form">
         <label for="query">
           Natural-language query (DE · FR · IT · EN)
-          <span id="status-inline" class="status-inline"></span>
         </label>
         <div class="search-row">
           <input

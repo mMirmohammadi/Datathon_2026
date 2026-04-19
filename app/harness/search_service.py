@@ -7,16 +7,21 @@ from app.core.hard_filters import HardFilterParams, search_listings
 from app.core.match_explain import build_match_detail
 from app.core.soft_signals import _load_signal_rows, build_soft_rankings
 from app.core.text_embed_search import (
+    _STATE as _TEXT_EMBED_STATE,
     is_loaded as text_embed_is_loaded,
     score_candidates as text_embed_score_candidates,
     text_embed_enabled,
 )
 from app.core.visual_search import (
+    _STATE as _VISUAL_STATE,
+    SCRAPE_SOURCE_TO_IMAGE_SOURCE,
     fuse_rankings,
     is_loaded as visual_is_loaded,
     score_candidates as visual_score_candidates,
     visual_enabled,
 )
+from app.memory.profile import UserProfile, build_profile
+from app.memory.rankings import MemorySignals, build_memory_rankings
 from app.models.schemas import HardFilters, ListingsResponse, SoftPreferences
 from app.participant.hard_fact_extraction import extract_hard_facts
 from app.participant.ranking import rank_listings
@@ -36,8 +41,13 @@ def _rerank_hybrid(
     query: str,
     soft: SoftPreferences | None,
     db_path: Path,
+    *,
+    user_id: int | None = None,
+    personalize: bool = False,
+    users_db_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Collect BM25 + visual + text_embed + per-soft rankings and fuse via RRF.
+    """Collect BM25 + visual + text_embed + soft + (opt) memory rankings and
+    fuse them via RRF.
 
     Always mutates each candidate dict with ``rrf_score``; adds
     ``visual_score`` / ``text_embed_score`` / ``soft_signals_activated`` when
@@ -47,6 +57,10 @@ def _rerank_hybrid(
     BM25 is always present (comes in via the input order). Visual and
     text-embedding channels are each skipped when their env flag is off or
     their index has not been loaded.
+
+    When ``user_id`` is set AND ``personalize`` is True, :mod:`app.memory`
+    builds up to five additional rankings from the user's interaction
+    history. Memory is purely additive - nothing existing is replaced.
     """
     if not candidates:
         return candidates
@@ -73,6 +87,24 @@ def _rerank_hybrid(
     soft_rankings = build_soft_rankings(candidates, soft, db_path)
     rankings.extend(soft_rankings)
 
+    memory_rankings_count = 0
+    memory_signals: MemorySignals | None = None
+    if personalize and user_id is not None and users_db_path is not None:
+        profile = build_profile(
+            user_id=user_id,
+            users_db_path=users_db_path,
+            listings_db_path=db_path,
+        )
+        mem_rankings, memory_signals = build_memory_rankings(
+            candidates=candidates,
+            profile=profile,
+            text_state=_TEXT_EMBED_STATE if text_embed_is_loaded() else None,
+            visual_state=_VISUAL_STATE if visual_is_loaded() else None,
+            scrape_to_image_source=SCRAPE_SOURCE_TO_IMAGE_SOURCE,
+        )
+        rankings.extend(mem_rankings)
+        memory_rankings_count = len(mem_rankings)
+
     fused = fuse_rankings(rankings)
 
     for candidate in candidates:
@@ -81,6 +113,11 @@ def _rerank_hybrid(
         candidate["text_embed_score"] = text_embed_scores.get(listing_id)
         candidate["rrf_score"] = fused.get(listing_id, 0.0)
         candidate["soft_signals_activated"] = len(soft_rankings)
+        candidate["memory_rankings_activated"] = memory_rankings_count
+        if memory_signals is not None:
+            candidate["memory_score"] = memory_signals.composite(listing_id)
+        else:
+            candidate["memory_score"] = None
 
     candidates.sort(key=lambda c: -c["rrf_score"])
     return candidates
@@ -99,14 +136,18 @@ def _pipeline_snapshot(
     non-NULL candidate value contributes one ranking).
     """
     soft_count = 0
+    memory_count = 0
     if candidates:
-        # Every candidate carries the same count (set by _rerank_hybrid).
+        # Every candidate carries the same counts (set by _rerank_hybrid).
         soft_count = int(candidates[0].get("soft_signals_activated") or 0)
+        memory_count = int(candidates[0].get("memory_rankings_activated") or 0)
     return {
         "bm25": True,  # always in the fusion (input order channel)
         "visual": bool(visual_enabled() and visual_is_loaded()),
         "text_embed": bool(text_embed_enabled() and text_embed_is_loaded()),
         "soft_rankings": soft_count,
+        "memory": memory_count > 0,
+        "memory_rankings": memory_count,
         "rrf_k": 60,
     }
 
@@ -117,6 +158,9 @@ def query_from_text(
     query: str,
     limit: int,
     offset: int,
+    user_id: int | None = None,
+    personalize: bool = False,
+    users_db_path: Path | None = None,
 ) -> ListingsResponse:
     hard_facts = extract_hard_facts(query)
     hard_facts.limit = max(limit, HYBRID_POOL)
@@ -125,7 +169,13 @@ def query_from_text(
     candidates = filter_hard_facts(db_path, hard_facts)
     pool_size = len(candidates)
     candidates = _rerank_hybrid(
-        candidates, query, hard_facts.soft_preferences, db_path
+        candidates,
+        query,
+        hard_facts.soft_preferences,
+        db_path,
+        user_id=user_id,
+        personalize=personalize,
+        users_db_path=users_db_path,
     )
     pipeline = _pipeline_snapshot(candidates, hard_facts.soft_preferences)
     candidates = candidates[offset : offset + limit]

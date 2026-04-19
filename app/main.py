@@ -7,7 +7,10 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
+from app.api.routes.auth import router as auth_router
+from app.api.routes.interactions import router as interactions_router
 from app.api.routes.listings import router as listings_router
+from app.auth.db import bootstrap_users_db
 from app.config import get_settings
 from app.core.text_embed_search import load_text_embed_index, text_embed_enabled
 from app.core.visual_search import load_visual_index, visual_enabled
@@ -18,6 +21,7 @@ from app.harness.bootstrap import bootstrap_database
 async def lifespan(app: FastAPI):
     settings = get_settings()
     bootstrap_database(db_path=settings.db_path, raw_data_dir=settings.raw_data_dir)
+    bootstrap_users_db(settings.users_db_path)
     if visual_enabled():
         load_visual_index()
     else:
@@ -44,6 +48,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(listings_router)
+app.include_router(auth_router)
+app.include_router(interactions_router)
 
 _sred_images_dir = get_settings().raw_data_dir / "sred_images"
 if _sred_images_dir.exists():

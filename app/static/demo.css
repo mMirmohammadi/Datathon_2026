@@ -76,13 +76,16 @@ body {
 }
 
 .status {
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   padding: 6px 12px;
   border-radius: 999px;
   background: var(--panel);
   border: 1px solid var(--border);
-  min-width: 120px;
   text-align: center;
+  white-space: nowrap;
+  line-height: 1;
+  /* Sits inside .auth-widget as the last pill; heights match the buttons. */
 }
 
 .status.loading {
@@ -115,32 +118,6 @@ body {
 .search-panel > form {
   max-width: 1400px;
   margin: 0 auto;
-}
-
-.search-panel .status-inline {
-  float: right;
-  margin-top: -2px;
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  color: var(--muted);
-}
-
-.search-panel .status-inline.ok {
-  color: var(--accent-2);
-  border-color: rgba(82, 224, 181, 0.45);
-}
-
-.search-panel .status-inline.loading {
-  color: var(--warn);
-  border-color: rgba(255, 184, 107, 0.45);
-}
-
-.search-panel .status-inline.err {
-  color: var(--hard);
-  border-color: rgba(240, 113, 120, 0.45);
 }
 
 #search-form label {
@@ -966,4 +943,619 @@ kbd {
   border-radius: 3px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 11px;
+}
+
+/* ===== Auth widget + modal ================================================ */
+
+/* The HTML `hidden` attribute must always beat any `display: flex/grid/etc`
+ * set by a later rule. Without this, .auth-user and .auth-anon both stay
+ * visible after a JS `el.hidden = true` because class-level `display` wins.
+ */
+[hidden] {
+  display: none !important;
+}
+
+.topbar-right {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.auth-widget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.auth-anon,
+.auth-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auth-user-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: #fff;
+  opacity: 0.9;
+}
+
+.auth-btn {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.05s ease;
+  white-space: nowrap;
+}
+
+.auth-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.auth-btn.primary {
+  background: #fff;
+  color: #132;
+  border-color: #fff;
+}
+
+.auth-btn.primary:hover {
+  background: #f4f8ff;
+}
+
+.auth-btn.danger {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.auth-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.4);
+}
+
+.auth-btn:active {
+  transform: translateY(1px);
+}
+
+.personalize-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 12px;
+  line-height: 1;
+  color: #fff;
+  cursor: pointer;
+  user-select: none;
+}
+
+.personalize-toggle input {
+  accent-color: #a78bfa;
+}
+
+.mem-indicator {
+  color: #a78bfa;
+  font-weight: 600;
+}
+
+/* ----- modal ----- */
+
+.modal {
+  border: none;
+  border-radius: 16px;
+  padding: 0;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  max-width: 420px;
+  width: min(420px, 94vw);
+  background: #fff;
+  color: #111;
+}
+
+.modal::backdrop {
+  background: rgba(10, 18, 32, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.modal-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px 22px;
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  color: #555;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.modal-close:hover {
+  color: #111;
+}
+
+.modal-error {
+  background: #fee;
+  border: 1px solid #f5a3a3;
+  color: #8b1a1a;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.modal-tabs {
+  display: flex;
+  gap: 4px;
+  background: #f1f4f9;
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.modal-tabs .tab {
+  flex: 1;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #475;
+  cursor: pointer;
+}
+
+.modal-tabs .tab.active {
+  background: #fff;
+  color: #111;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.auth-field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #223;
+}
+
+.auth-field input {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  font-size: 14px;
+  background: #fff;
+  color: #111;
+}
+
+.auth-field input:focus {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.modal-foot .auth-btn {
+  color: #fff;
+  background: #3b5ef6;
+  border-color: #3b5ef6;
+  padding: 10px 18px;
+  font-size: 14px;
+}
+
+.modal-foot .auth-btn:hover {
+  background: #2f4edc;
+}
+
+.modal-foot .auth-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ----- favorites drawer ----- */
+
+/* ---- Saved-listings drawer card ------------------------------------------ */
+
+/* The drawer needs more horizontal room than the login/register modal so the
+ * thumbnail + body fit without wrapping awkwardly. */
+#favorites-modal {
+  max-width: 560px;
+  width: min(560px, 96vw);
+}
+
+#favorites-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.fav-card {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  background: #fff;
+  align-items: stretch;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, transform 0.05s ease, border-color 0.15s ease;
+}
+
+.fav-card:hover {
+  border-color: #c7d2fe;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.12);
+}
+
+.fav-card:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+.fav-card:active {
+  transform: translateY(1px);
+}
+
+.fav-thumb {
+  width: 96px;
+  height: 96px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f1f4f9;
+  flex-shrink: 0;
+}
+
+.fav-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.fav-thumb-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.fav-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fav-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fav-meta {
+  font-size: 13px;
+  color: #334;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fav-place {
+  margin-top: -2px;
+}
+
+.fav-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.chip-sm {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #46506a;
+}
+
+.fav-footer {
+  margin-top: auto;
+}
+
+.fav-footer kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  background: #f1f4f9;
+  border-radius: 4px;
+}
+
+/* ===== Per-card save / dismiss / memory-badge ============================= */
+
+.listing-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.listing-action {
+  appearance: none;
+  border: 1px solid #d0d7e2;
+  background: #f8fafc;
+  color: #223;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.listing-action:hover {
+  background: #eef2f7;
+}
+
+.like-btn.liked {
+  background: #fee2e2;
+  border-color: #ef4444;
+  color: #991b1b;
+  font-weight: 600;
+}
+
+.save-btn.saved {
+  background: #fef3c7;
+  border-color: #f59e0b;
+  color: #854d0e;
+  font-weight: 600;
+}
+
+.dismiss-btn:hover {
+  background: #fee;
+  border-color: #f5a3a3;
+  color: #8b1a1a;
+}
+
+/* Undo state: make it visually distinct from the first click so the user
+ * sees the button is now offering the inverse action, not a double-dismiss. */
+.dismiss-btn.dismissed {
+  background: #e0e7ff;
+  border-color: #6366f1;
+  color: #3730a3;
+  font-weight: 600;
+}
+
+.dismiss-btn.dismissed:hover {
+  background: #c7d2fe;
+  border-color: #4f46e5;
+  color: #312e81;
+}
+
+.listing-card.dismissed {
+  opacity: 0.4;
+  filter: grayscale(0.6);
+}
+
+/* The undo button must stay fully legible even while the rest of the card
+ * is dimmed; otherwise users can't find the way back. */
+.listing-card.dismissed .dismiss-btn {
+  opacity: 1;
+  filter: none;
+}
+
+.memory-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #a78bfa 0%, #60a5fa 100%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(124, 58, 237, 0.25);
+  /* When it sits inside .listing-actions, push it to the row's right edge. */
+  margin-left: auto;
+}
+
+.listing-card.memory-boosted {
+  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.18),
+              0 6px 18px rgba(124, 58, 237, 0.08);
+}
+
+/* ===== Listing detail modal =============================================== */
+
+#listing-detail-modal {
+  max-width: 720px;
+  width: min(720px, 96vw);
+}
+
+#listing-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.detail-media {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #f1f4f9;
+  aspect-ratio: 16 / 9;
+}
+
+.detail-hero {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.detail-no-image {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.detail-carousel {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.detail-carousel .img-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(17, 17, 17, 0.55);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.detail-carousel .img-nav:hover {
+  background: rgba(17, 17, 17, 0.8);
+}
+
+.detail-carousel .img-nav.prev {
+  left: 8px;
+}
+
+.detail-carousel .img-nav.next {
+  right: 8px;
+}
+
+.detail-carousel .img-count {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  background: rgba(17, 17, 17, 0.6);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  pointer-events: auto;
+}
+
+.detail-meta {
+  font-size: 14px;
+  color: #223;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.detail-place {
+  font-size: 13px;
+}
+
+.detail-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-desc {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #1f2937;
+  border-top: 1px solid #e3e8ef;
+  padding-top: 10px;
+  /* Preserve paragraph breaks from the sanitized description. */
+  white-space: normal;
+  word-break: break-word;
+}
+
+.detail-desc p {
+  margin: 0 0 8px;
+}
+
+.detail-footer {
+  font-size: 12px;
+  color: #475569;
+  border-top: 1px solid #e3e8ef;
+  padding-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.detail-footer a {
+  color: #3b5ef6;
+  text-decoration: none;
+}
+
+.detail-footer a:hover {
+  text-decoration: underline;
+}
+
+.detail-footer kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  padding: 1px 6px;
+  background: #f1f4f9;
+  border-radius: 4px;
 }

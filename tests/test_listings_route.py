@@ -229,7 +229,9 @@ def test_post_listings_response_carries_demo_contract(
     assert isinstance(meta["candidate_pool_size"], int)
     assert isinstance(meta["returned"], int)
 
-    # Every returned listing must carry a breakdown with the five pinned keys.
+    # Every returned listing must carry a breakdown with the pinned keys.
+    # Memory-related keys were added when user-system personalization shipped;
+    # they're always present and default to (0, None) for anonymous callers.
     assert body["listings"]
     for item in body["listings"]:
         bd = item["breakdown"]
@@ -240,10 +242,15 @@ def test_post_listings_response_carries_demo_contract(
             "visual_score",
             "text_embed_score",
             "soft_signals_activated",
+            "memory_rankings_activated",
+            "memory_score",
         }
         # With no keyword match, bm25_score is None, not a huge sentinel.
         assert bd["bm25_score"] is None or bd["bm25_score"] > 0
         assert bd["soft_signals_activated"] == pipeline["soft_rankings"]
+        # Anonymous callers never trigger the memory channel.
+        assert bd["memory_rankings_activated"] == 0
+        assert bd["memory_score"] is None
 
     # Every returned listing must also carry match_detail, shaped for the UI.
     for item in body["listings"]:
@@ -291,3 +298,49 @@ def test_demo_page_served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         assert r.status_code == 200
         r = client.get("/demo-assets/demo.js")
         assert r.status_code == 200
+
+
+# ---------- GET /listings/{id} --------------------------------------------
+
+
+def test_get_listing_returns_full_data(tmp_path, monkeypatch) -> None:
+    """Clicking a saved card calls ``GET /listings/{id}``; the handler
+    must return the full ``ListingData`` shape the detail modal renders."""
+    import os
+    import sqlite3
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+
+    repo_root = Path(__file__).resolve().parents[1]
+    os.environ["LISTINGS_RAW_DATA_DIR"] = str(repo_root / "raw_data")
+
+    from app.main import app
+    from app.config import get_settings
+
+    with TestClient(app) as client:
+        with sqlite3.connect(get_settings().db_path) as db:
+            row = db.execute(
+                "SELECT listing_id FROM listings "
+                "WHERE title IS NOT NULL AND price IS NOT NULL LIMIT 1"
+            ).fetchone()
+        assert row is not None
+        lid = row[0]
+        r = client.get(f"/listings/{lid}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Pinned shape for the detail modal.
+    assert body["id"] == lid
+    assert "title" in body and body["title"]
+    assert "price_chf" in body
+    assert "rooms" in body
+    assert "image_urls" in body and isinstance(body["image_urls"], (list, type(None)))
+    assert "features" in body and isinstance(body["features"], list)
+
+
+def test_get_listing_404(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.get("/listings/nonexistent_xyz_1234")
+    assert r.status_code == 404

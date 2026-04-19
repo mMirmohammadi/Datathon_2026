@@ -64,6 +64,8 @@ def _to_breakdown(candidate: dict[str, Any]) -> RankingBreakdown:
     visual = candidate.get("visual_score")
     text_embed = candidate.get("text_embed_score")
     soft_count = candidate.get("soft_signals_activated")
+    memory_count = candidate.get("memory_rankings_activated")
+    memory_score = candidate.get("memory_score")
     rrf = candidate.get("rrf_score")
 
     return RankingBreakdown(
@@ -72,6 +74,8 @@ def _to_breakdown(candidate: dict[str, Any]) -> RankingBreakdown:
         visual_score=float(visual) if visual is not None else None,
         text_embed_score=float(text_embed) if text_embed is not None else None,
         soft_signals_activated=int(soft_count) if isinstance(soft_count, int) else 0,
+        memory_rankings_activated=int(memory_count) if isinstance(memory_count, int) else 0,
+        memory_score=float(memory_score) if memory_score is not None else None,
     )
 
 
@@ -99,6 +103,16 @@ def _hybrid_reason(candidate: dict[str, Any]) -> str:
             "soft preferences" if soft_count == 1
             else f"{soft_count} soft preferences"
         )
+    memory_count = candidate.get("memory_rankings_activated")
+    if isinstance(memory_count, int) and memory_count > 0:
+        memory_score = candidate.get("memory_score")
+        if memory_score is not None:
+            parts.append(
+                f"personalized ({memory_count} memory signals, "
+                f"score {float(memory_score):.2f})"
+            )
+        else:
+            parts.append(f"personalized ({memory_count} memory signals)")
     if len(parts) == 1:
         parts.append("hybrid rank")
     return "; ".join(parts) + "."

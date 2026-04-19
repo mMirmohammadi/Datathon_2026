@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class SoftPreferences(BaseModel):
@@ -61,6 +62,14 @@ class ListingsQueryRequest(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=25, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
+    personalize: bool = Field(
+        default=True,
+        description=(
+            "When True and the caller is authenticated, memory-based "
+            "personalization rankings are added to the RRF fusion. Anonymous "
+            "callers ignore this flag (no history to personalize on)."
+        ),
+    )
 
 
 class ListingsSearchRequest(BaseModel):
@@ -105,6 +114,8 @@ class RankingBreakdown(BaseModel):
     visual_score: float | None = None
     text_embed_score: float | None = None
     soft_signals_activated: int = 0
+    memory_rankings_activated: int = 0
+    memory_score: float | None = None
 
 
 class HardCheck(BaseModel):
@@ -169,3 +180,133 @@ class ListingsResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+# ---------- Auth + interactions (user system) -------------------------------
+
+
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,32}$")
+
+
+def _validate_password_strength(value: str) -> str:
+    """Reject empty, too-short, letter-only, and digit-only passwords.
+
+    Kept intentionally simple: min-8 chars + must contain both a letter and
+    a digit. Anything more elaborate (common-password blocklists, zxcvbn)
+    is out of scope for the datathon demo but trivial to bolt on later.
+    """
+    if not isinstance(value, str) or len(value) < 8:
+        raise ValueError("password must be at least 8 characters")
+    if not any(c.isalpha() for c in value):
+        raise ValueError("password must contain at least one letter")
+    if not any(c.isdigit() for c in value):
+        raise ValueError("password must contain at least one digit")
+    return value
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    email: EmailStr
+    password: str = Field(..., repr=False)
+
+    @field_validator("username")
+    @classmethod
+    def _validate_username(cls, value: str) -> str:
+        if not _USERNAME_RE.match(value):
+            raise ValueError(
+                "username must be 3-32 chars from [A-Za-z0-9_.-]"
+            )
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, value: str) -> str:
+        return _validate_password_strength(value)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    password: str = Field(..., min_length=1, repr=False)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, repr=False)
+    new_password: str = Field(..., repr=False)
+
+    @field_validator("new_password")
+    @classmethod
+    def _validate_password(cls, value: str) -> str:
+        return _validate_password_strength(value)
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str = Field(..., min_length=1, repr=False)
+
+
+class UserPublic(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    created_at: str
+    last_login_at: str | None = None
+
+
+class CsrfResponse(BaseModel):
+    csrf_token: str
+
+
+InteractionKind = Literal[
+    # Positive preference signals (feed the memory profile).
+    # ``save`` / ``unsave`` are kept as legacy aliases for ``like`` / ``unlike``
+    # so events written before the split still carry their original meaning.
+    "save",
+    "unsave",
+    "like",
+    "unlike",
+    # Bookmarks - pure user-facing list, NO memory weight. A user can save an
+    # apartment they're curious about without telling the ranker "give me more
+    # listings like this".
+    "bookmark",
+    "unbookmark",
+    # Implicit signals.
+    "click",
+    "dwell",
+    # Explicit negative + its undo.
+    "dismiss",
+    "undismiss",
+]
+
+
+class InteractionRequest(BaseModel):
+    listing_id: str = Field(..., min_length=1, max_length=64)
+    kind: InteractionKind
+    value: float | None = Field(
+        default=None,
+        description="Optional numeric payload (e.g. dwell seconds).",
+    )
+
+
+class FavoriteListing(BaseModel):
+    """One saved / liked entry, enriched with a compact listing summary so the
+    UI can render a thumbnail row without a second round-trip.
+
+    Every enrichment field is optional because the listing might have been
+    deleted from ``listings.db`` between the interaction being written and the
+    drawer being opened (rare but possible with a re-imported bundle).
+    """
+
+    listing_id: str
+    saved_at: str
+    title: str | None = None
+    price_chf: int | None = None
+    rooms: float | None = None
+    area_sqm: int | None = None
+    city: str | None = None
+    canton: str | None = None
+    object_category: str | None = None
+    hero_image_url: str | None = None
+    features: list[str] = Field(default_factory=list)
+
+
+class FavoritesResponse(BaseModel):
+    favorites: list[FavoriteListing]
