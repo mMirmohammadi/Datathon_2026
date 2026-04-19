@@ -435,6 +435,41 @@ code {
 
 .chip-ico { font-size: 14px; }
 
+/* Compact state: once the user scrolls past the hero label, the sticky
+ * search panel collapses the big title + example chips so it takes minimal
+ * vertical room without losing the input row. Toggled by demo.js via a
+ * `.scrolled` class; transitions are scoped tightly so no other state
+ * change animates by accident. `max-height: 320px` is a fixed upper bound
+ * chosen to exceed the natural content height so the collapse animates
+ * across its full 0→natural range at 0.24s. */
+.search-panel {
+  transition: padding 0.22s ease;
+}
+
+.search-label,
+.examples {
+  max-height: 320px;
+  overflow: hidden;
+  transition:
+    max-height 0.24s ease,
+    opacity 0.15s ease,
+    margin 0.24s ease;
+}
+
+.search-panel.scrolled {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.search-panel.scrolled .search-label,
+.search-panel.scrolled .examples {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  pointer-events: none;
+}
+
 /* =========================================================================
    "How does this work?" explainer (collapsed by default)
    ========================================================================= */

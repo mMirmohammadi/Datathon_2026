@@ -214,15 +214,15 @@ function renderHardFilters(plan) {
     return;
   }
 
-  // Every row: label + value or '—' (null/empty). Never hide nulls — the user
-  // wants to see exactly what the LLM did and didn't emit.
+  // Hide rows the LLM didn't emit so the panel only shows what's actually
+  // constraining the search. The raw response is still available in the
+  // "For developers" panel for users who want to see every schema field.
   const rows = [];
   const add = (k, v) => {
-    const isNull = v == null || (Array.isArray(v) && v.length === 0);
+    if (v == null || (Array.isArray(v) && v.length === 0)) return;
     rows.push(
-      `<div class="kv"><span class="k">${esc(k)}</span><span class="v ${
-        isNull ? "null" : ""
-      }">${isNull ? "—" : esc(v)}</span></div>`,
+      `<div class="kv"><span class="k">${esc(k)}</span>` +
+      `<span class="v">${esc(v)}</span></div>`,
     );
   };
 
@@ -291,31 +291,31 @@ function renderHardFilters(plan) {
   const featuresExcluded = plan.features_excluded || [];
   const keywords = plan.bm25_keywords || [];
 
-  html += `
-    <div class="kv"><span class="k">features (required)</span><span class="v">${
-      features.length ? "" : "—"
-    }</span></div>
-    <div>${
-      features
-        .map((f) => `<span class="tag hard">${esc(f)}</span>`)
-        .join("") || ""
-    }</div>
-    <div class="kv" style="margin-top:6px"><span class="k">features_excluded</span><span class="v">${
-      featuresExcluded.length ? "" : "—"
-    }</span></div>
-    <div>${
-      featuresExcluded
-        .map((f) => `<span class="tag hard">¬ ${esc(f)}</span>`)
-        .join("") || ""
-    }</div>
-    <div class="kv" style="margin-top:6px"><span class="k">bm25_keywords</span><span class="v">${
-      keywords.length ? "" : "—"
-    }</span></div>
-    <div>${
-      keywords
-        .map((k) => `<span class="tag hard" title="Passed to FTS5 MATCH">${esc(k)}</span>`)
-        .join("") || ""
-    }</div>`;
+  if (features.length) {
+    html += `
+    <div class="kv"><span class="k">features (required)</span><span class="v"></span></div>
+    <div>${features
+      .map((f) => `<span class="tag hard">${esc(f)}</span>`)
+      .join("")}</div>`;
+  }
+  if (featuresExcluded.length) {
+    html += `
+    <div class="kv" style="margin-top:6px"><span class="k">features_excluded</span><span class="v"></span></div>
+    <div>${featuresExcluded
+      .map((f) => `<span class="tag hard">¬ ${esc(f)}</span>`)
+      .join("")}</div>`;
+  }
+  if (keywords.length) {
+    html += `
+    <div class="kv" style="margin-top:6px"><span class="k">bm25_keywords</span><span class="v"></span></div>
+    <div>${keywords
+      .map((k) => `<span class="tag hard" title="Passed to FTS5 MATCH">${esc(k)}</span>`)
+      .join("")}</div>`;
+  }
+
+  if (!html) {
+    html = '<p class="empty">No hard constraints extracted — ranking is driven entirely by your nice-to-haves.</p>';
+  }
 
   els.hardView.innerHTML = html;
 }
@@ -2239,5 +2239,26 @@ if (els.favoritesList) {
 hydrateAuthState().catch((e) => {
   console.warn("auth hydrate failed", e);
 });
+
+// Compact the sticky search panel once the user has scrolled past the hero
+// label. A single rAF-throttled `scroll` listener toggles `.scrolled`; the
+// collapse animation itself is CSS. Threshold (~72px) is the height of the
+// big label so the transition kicks in just as it would scroll off anyway.
+(function initCompactSearchBar() {
+  const panel = document.querySelector(".search-panel");
+  if (!panel) return;
+  const THRESHOLD = 72;
+  let pending = false;
+  const update = () => {
+    pending = false;
+    panel.classList.toggle("scrolled", window.scrollY > THRESHOLD);
+  };
+  window.addEventListener("scroll", () => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(update);
+  }, { passive: true });
+  update();
+})();
 
 setStatus("Ready", "ok");
