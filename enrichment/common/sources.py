@@ -16,6 +16,8 @@ TEXT_REGEX_FR: Final[str]        = "text_regex_fr"
 TEXT_REGEX_IT: Final[str]        = "text_regex_it"
 TEXT_REGEX_EN: Final[str]        = "text_regex_en"
 TEXT_GPT_5_4: Final[str]         = "text_gpt_5_4"         # pass 2 GPT: OpenAI gpt-5.4-mini extraction
+TEXT_GPT_5_4_NANO: Final[str]    = "text_gpt_5_4_nano"    # pass 1e + pass 4: OpenAI gpt-5.4-nano (cheapest)
+PLZ_MAJORITY_VOTE: Final[str]    = "plz_majority_vote"    # pass 1d: canton from corpus-derived PLZ→canton mode
 DEFAULT_CONSTANT: Final[str]     = "default_constant"     # e.g. offer_type='RENT' default
 CROSS_REF: Final[str]            = "cross_ref"            # reconciled across sources
 UNKNOWN: Final[str]              = "UNKNOWN"              # pass 3 sentinel
@@ -28,7 +30,8 @@ VALID_SOURCES: frozenset[str] = frozenset({
     ORIGINAL,
     REV_GEO_OFFLINE, REV_GEO_NOMINATIM,
     TEXT_REGEX_DE, TEXT_REGEX_FR, TEXT_REGEX_IT, TEXT_REGEX_EN,
-    TEXT_GPT_5_4,
+    TEXT_GPT_5_4, TEXT_GPT_5_4_NANO,
+    PLZ_MAJORITY_VOTE,
     DEFAULT_CONSTANT, CROSS_REF,
     UNKNOWN, DROPPED_BAD_DATA,
     UNKNOWN_PENDING,
