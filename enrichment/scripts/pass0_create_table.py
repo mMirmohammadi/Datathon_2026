@@ -54,8 +54,10 @@ def _parse_raw_json(raw: str | None) -> dict:
 def _get_field_value(listing_row, raw_json: dict, field: EnrichedField):
     if field.origin == "listings_column":
         return listing_row[field.listings_column]
-    # raw_json
-    return raw_json.get(field.raw_json_key)
+    if field.origin == "raw_json":
+        return raw_json.get(field.raw_json_key)
+    # origin == "extraction_only" — no backfill source; pass 2b fills later.
+    return None
 
 
 def _build_insert_sql(col_order: list[str]) -> str:

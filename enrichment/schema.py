@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-FieldOrigin = Literal["listings_column", "raw_json"]
+FieldOrigin = Literal["listings_column", "raw_json", "extraction_only"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +24,10 @@ class EnrichedField:
     origin: FieldOrigin
     listings_column: str | None = None   # set when origin == "listings_column"
     raw_json_key: str | None = None      # set when origin == "raw_json"
+    # origin == "extraction_only" means the field has no source in listings or
+    # raw_json — it is populated exclusively by a later extraction pass
+    # (e.g. pass 2b GPT on the description). Pass 0 seeds these as
+    # UNKNOWN-pending; the extraction pass overwrites where it finds signal.
 
 
 FIELDS: list[EnrichedField] = [
@@ -71,6 +75,13 @@ FIELDS: list[EnrichedField] = [
     EnrichedField("agency_name",  "raw_json", raw_json_key="agency_name"),
     EnrichedField("agency_phone", "raw_json", raw_json_key="agency_phone"),
     EnrichedField("agency_email", "raw_json", raw_json_key="agency_email"),
+    # --- Pass 2b: bathroom + cellar + shared-amenity (GPT-5.4-nano from description) ---
+    # Origin "extraction_only": pass 0 seeds UNKNOWN-pending for every row; pass 2b
+    # fills where signal is present; pass 3 sentinel-fills remainder to UNKNOWN.
+    EnrichedField("bathroom_count",   "extraction_only"),
+    EnrichedField("bathroom_shared",  "extraction_only"),
+    EnrichedField("has_cellar",       "extraction_only"),
+    EnrichedField("kitchen_shared",   "extraction_only"),
 ]
 
 
@@ -84,6 +95,12 @@ def validate_fields() -> None:
             raise RuntimeError(f"{f.name}: origin=listings_column but listings_column is empty")
         if f.origin == "raw_json" and not f.raw_json_key:
             raise RuntimeError(f"{f.name}: origin=raw_json but raw_json_key is empty")
+        if f.origin == "extraction_only" and (f.listings_column or f.raw_json_key):
+            raise RuntimeError(
+                f"{f.name}: origin=extraction_only must have no listings_column "
+                f"or raw_json_key (got listings_column={f.listings_column!r}, "
+                f"raw_json_key={f.raw_json_key!r})"
+            )
 
 
 validate_fields()
