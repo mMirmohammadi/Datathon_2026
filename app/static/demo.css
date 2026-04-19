@@ -941,6 +941,44 @@ code {
   font-weight: 500;
 }
 
+/* ----- Pass-2b chips (bathroom / cellar / kitchen) ---------------------- */
+/* Visual distinction from .feat so the user can tell which fields came from
+   the description extraction vs the structured DB feature columns. Warmer
+   palette (amber → terracotta) pairs with the attach-photo button hover. */
+.listing-enriched,
+.detail-enriched {
+  margin: 6px 0 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.chip-enriched {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fcd6b4;
+  font-weight: 500;
+}
+
+/* Shared-living chip: slightly louder so users can distinguish WG listings
+   at a glance (these are the 2.3% of corpus where bathroom/kitchen are NOT
+   private). */
+.chip-enriched.chip-shared {
+  background: #fef3c7;
+  color: #854d0e;
+  border-color: #fde68a;
+}
+
+/* Negated (e.g. "no cellar") — desaturated so the chip reads as an absence. */
+.chip-enriched.chip-negated {
+  background: #f3f4f6;
+  color: #6b7280;
+  border-color: #e5e7eb;
+}
+
 /* ----- per-card action buttons: love / save / hide ---------------------- */
 
 .listing-actions {

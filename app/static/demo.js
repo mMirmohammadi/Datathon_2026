@@ -101,6 +101,46 @@ function esc(s) {
   }[c]));
 }
 
+// Pass-2b display helpers. All 4 fields are tri-state (true / false / null for
+// UNKNOWN). Renders one chip per field that has a known value; empty string
+// when UNKNOWN, so the chip row collapses cleanly for listings whose extractor
+// couldn't decide. Used by the listing card, detail drawer, and saved-listings.
+function bathroomChips(L) {
+  const chips = [];
+  if (L.bathroom_count != null) {
+    const n = Number(L.bathroom_count);
+    chips.push(
+      `<span class="chip-enriched" title="from pass-2b extraction">🛁 ${esc(n)} ${
+        n === 1 ? "bath" : "baths"
+      }</span>`,
+    );
+  }
+  if (L.bathroom_shared === true) {
+    chips.push(
+      `<span class="chip-enriched chip-shared" title="shared bathroom">🛁 shared</span>`,
+    );
+  } else if (L.bathroom_shared === false && L.bathroom_count == null) {
+    // Surface "private bath" only when we couldn't surface a count — avoid
+    // duplicating the 🛁 chip when both are present.
+    chips.push(`<span class="chip-enriched" title="private bathroom">🛁 private</span>`);
+  }
+  if (L.has_cellar === true) {
+    chips.push(`<span class="chip-enriched" title="has a cellar / Keller">🗝️ cellar</span>`);
+  } else if (L.has_cellar === false) {
+    chips.push(
+      `<span class="chip-enriched chip-negated" title="no cellar">🚫 cellar</span>`,
+    );
+  }
+  if (L.kitchen_shared === true) {
+    chips.push(
+      `<span class="chip-enriched chip-shared" title="shared kitchen / WG-Küche">🍳 shared</span>`,
+    );
+  } else if (L.kitchen_shared === false && L.bathroom_shared !== false) {
+    chips.push(`<span class="chip-enriched" title="private kitchen">🍳 private</span>`);
+  }
+  return chips.join("");
+}
+
 // Sanitize listing-description HTML with an allowlist and defense-in-depth.
 // Parses into a <template> (inert DOM: scripts / <img> don't fetch or run),
 // then (1) drops known-dangerous tags wholesale including their subtree, and
@@ -209,6 +249,26 @@ function renderHardFilters(plan) {
   add(
     "object_category",
     plan.object_category ? plan.object_category.join(", ") : null,
+  );
+  // Pass 2b (bathroom/cellar/kitchen) — show only when the LLM emitted a
+  // constraint so the panel stays compact for queries that don't mention them.
+  add(
+    "bathrooms",
+    plan.min_bathrooms == null && plan.max_bathrooms == null
+      ? null
+      : `${plan.min_bathrooms ?? "−∞"} .. ${plan.max_bathrooms ?? "+∞"}`,
+  );
+  add(
+    "bathroom_shared",
+    plan.bathroom_shared == null ? null : plan.bathroom_shared ? "shared" : "private",
+  );
+  add(
+    "has_cellar",
+    plan.has_cellar == null ? null : plan.has_cellar ? "required" : "excluded",
+  );
+  add(
+    "kitchen_shared",
+    plan.kitchen_shared == null ? null : plan.kitchen_shared ? "shared" : "private",
   );
 
   let html = rows.join("");
@@ -839,6 +899,10 @@ function renderListings(listings, meta) {
                   .join("")}</div>`
               : ""
           }
+          ${(() => {
+            const bc = bathroomChips(listing);
+            return bc ? `<div class="listing-enriched">${bc}</div>` : "";
+          })()}
           ${barFactory(res.breakdown)}
           <div class="reason-line">${esc(res.reason)}</div>
           <div class="listing-links">
@@ -1832,6 +1896,10 @@ function renderListingDetail(L) {
             .join("")}</div>`
         : ""
     }
+    ${(() => {
+      const bc = bathroomChips(L);
+      return bc ? `<div class="detail-enriched">${bc}</div>` : "";
+    })()}
     ${
       L.description
         ? `<div class="detail-desc">${sanitizeDescriptionHtml(L.description)}</div>`

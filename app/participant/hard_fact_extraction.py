@@ -76,6 +76,28 @@ FEATURES_EXCLUDED: only populate when the user explicitly negates ("without
 fireplace", "no garage", "ohne Kamin", "kein Erdgeschoss is handled via
 min_floor not features_excluded").
 
+BATHROOM / CELLAR / KITCHEN (pass-2b extracted fields):
+- "2 Badezimmer" / "two bathrooms" / "2 salles de bain" / "2 bagni"
+  -> min_bathrooms=2, max_bathrooms=2.
+- "mindestens 2 Badezimmer" / "at least 2 bathrooms" -> min_bathrooms=2.
+- "1 oder 2 Badezimmer" / "1-2 bathrooms" -> min_bathrooms=1, max_bathrooms=2.
+- "mit Keller" / "with cellar" / "avec cave" / "con cantina" -> has_cellar=true.
+- "ohne Keller" / "without cellar" -> has_cellar=false.
+- "eigene Küche" / "private kitchen" / "cuisine privee" -> kitchen_shared=false.
+- "Gemeinschaftsküche" / "shared kitchen" / "cuisine commune" / "cucina
+  condivisa" / "WG-Küche" -> kitchen_shared=true.
+- "eigenes Bad" / "private bathroom" / "salle de bain privee" ->
+  bathroom_shared=false.
+- "geteiltes Bad" / "shared bathroom" / "Gemeinschaftsbad" / "salle de bain
+  partagee" -> bathroom_shared=true.
+- "WG-Zimmer" / "shared flat room" / "chambre en coloc" -> bathroom_shared=true
+  AND kitchen_shared=true (canonical shared-living defaults).
+- "Einzelzimmer" / "private studio" where shared status is explicitly negated
+  -> bathroom_shared=false, kitchen_shared=false.
+
+These map to hard filters on the enriched DB columns. Do NOT emit them as
+bm25_keywords (dedicated filter fields exist).
+
 BM25_KEYWORDS: emit short literal terms the user mentioned that help lexical
 text matching against listing descriptions. Include:
 - Domain nouns: "Minergie", "Altbau", "Attika", "Dachwohnung", "Loft",
@@ -122,6 +144,12 @@ Output: {{"city":["zurich"],"min_rooms":3.0,"max_rooms":3.0,"max_price":2800,"fe
 
 Query: "Wohnung im Raum Zuerich oder Duebendorf, 2.5 bis 3.5 Zimmer, ab 70 m2, bis 3100 CHF, max 25 Min zum HB, guenstig und ruhig, nahe ETH"
 Output: {{"city":["zurich","dubendorf"],"min_rooms":2.5,"max_rooms":3.5,"min_area":70,"max_price":3100,"bm25_keywords":["Balkon","Waschturm"],"soft_preferences":{{"price_sentiment":"cheap","quiet":true,"near_public_transport":true,"commute_target":"zurich_hb","near_landmark":["ETH"]}}}}
+
+Query: "4.5 Zimmer Wohnung in Zuerich mit 2 Badezimmern und Keller, unter 4000 CHF"
+Output: {{"city":["zurich"],"min_rooms":4.5,"max_rooms":4.5,"min_bathrooms":2,"max_bathrooms":2,"has_cellar":true,"max_price":4000}}
+
+Query: "WG-Zimmer in Bern, bis 900 CHF"
+Output: {{"city":["bern"],"max_price":900,"object_category":["shared_room"],"bathroom_shared":true,"kitchen_shared":true}}
 """
 
 
@@ -189,6 +217,11 @@ _HARD_FILTERS_SCHEMA = {
                 ["array", "null"],
                 items={"type": "string", "enum": OBJECT_CATEGORY_ENGLISH},
             ),
+            "min_bathrooms": _nullable(["integer", "null"], minimum=0),
+            "max_bathrooms": _nullable(["integer", "null"], minimum=0),
+            "bathroom_shared": _nullable(["boolean", "null"]),
+            "has_cellar": _nullable(["boolean", "null"]),
+            "kitchen_shared": _nullable(["boolean", "null"]),
             "bm25_keywords": _nullable(["array", "null"], items={"type": "string"}),
             "soft_preferences": _SOFT_PREFERENCES_SCHEMA,
         },
@@ -198,6 +231,8 @@ _HARD_FILTERS_SCHEMA = {
             "min_area", "max_area", "min_floor", "max_floor",
             "min_year_built", "max_year_built", "available_from_after",
             "features", "features_excluded", "object_category",
+            "min_bathrooms", "max_bathrooms", "bathroom_shared",
+            "has_cellar", "kitchen_shared",
             "bm25_keywords", "soft_preferences",
         ],
     },

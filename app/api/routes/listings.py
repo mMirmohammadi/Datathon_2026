@@ -69,7 +69,16 @@ def get_listing(listing_id: str) -> ListingData:
     settings = get_settings()
     with get_connection(settings.db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM listings WHERE listing_id = ?",
+            """
+            SELECT l.*,
+                   e.bathroom_count_filled  AS bathroom_count_raw,
+                   e.bathroom_shared_filled AS bathroom_shared_raw,
+                   e.has_cellar_filled      AS has_cellar_raw,
+                   e.kitchen_shared_filled  AS kitchen_shared_raw
+            FROM listings l
+            LEFT JOIN listings_enriched e ON e.listing_id = l.listing_id
+            WHERE l.listing_id = ?
+            """,
             (listing_id,),
         ).fetchone()
     if row is None:

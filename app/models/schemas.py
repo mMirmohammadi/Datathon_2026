@@ -51,6 +51,14 @@ class HardFilters(BaseModel):
     features: list[str] | None = None
     features_excluded: list[str] | None = None
     object_category: list[str] | None = None
+    # Pass 2b enriched fields. Hard-filter semantics: UNKNOWN sentinels never
+    # satisfy a positive constraint (e.g. has_cellar=true excludes rows whose
+    # has_cellar_filled is 'UNKNOWN').
+    min_bathrooms: int | None = Field(default=None, ge=0)
+    max_bathrooms: int | None = Field(default=None, ge=0)
+    bathroom_shared: bool | None = None
+    has_cellar: bool | None = None
+    kitchen_shared: bool | None = None
     bm25_keywords: list[str] | None = None
     soft_preferences: SoftPreferences | None = None
     # Internal cap for the candidate pool passed into the RRF ranker. Bumped
@@ -100,6 +108,13 @@ class ListingData(BaseModel):
     offer_type: str | None = None
     object_category: str | None = None
     object_type: str | None = None
+    # Pass 2b enriched fields (gpt-5.4-nano extraction). None = UNKNOWN — the
+    # listing description did not mention the feature. UI should render "—"
+    # rather than a false/zero claim.
+    bathroom_count: int | None = None
+    bathroom_shared: bool | None = None
+    has_cellar: bool | None = None
+    kitchen_shared: bool | None = None
 
 
 class RankingBreakdown(BaseModel):

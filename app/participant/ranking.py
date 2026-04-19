@@ -150,6 +150,10 @@ def _to_listing_data(candidate: dict[str, Any]) -> ListingData:
         offer_type=candidate.get("offer_type"),
         object_category=candidate.get("object_category"),
         object_type=candidate.get("object_type"),
+        bathroom_count=candidate.get("bathroom_count"),
+        bathroom_shared=candidate.get("bathroom_shared"),
+        has_cellar=candidate.get("has_cellar"),
+        kitchen_shared=candidate.get("kitchen_shared"),
     )
 
 
