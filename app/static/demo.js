@@ -245,7 +245,7 @@ function renderSoftPrefs(plan) {
   const soft = plan && plan.soft_preferences;
   if (!soft) {
     els.softView.innerHTML =
-      '<p class="empty">LLM did not activate any soft preferences for this query.</p>';
+      '<p class="empty">You didn\'t ask for any nice-to-haves this time.</p>';
     return;
   }
 
@@ -272,13 +272,13 @@ function renderSoftPrefs(plan) {
 
   if (chips.length === 0) {
     els.softView.innerHTML =
-      '<p class="empty">LLM extracted the soft object but activated no keys.</p>';
+      '<p class="empty">No nice-to-haves activated for this search.</p>';
     return;
   }
 
   els.softView.innerHTML = `
     <p class="muted small" style="margin:0 0 6px 0">
-      Each activated key becomes its own listing ranking; rankings are fused with the other channels via RRF.
+      Each wish becomes its own sorted list. Homes that rank high on many lists bubble up to the top.
     </p>
     <div>${chips.join("")}</div>`;
 }
@@ -286,7 +286,7 @@ function renderSoftPrefs(plan) {
 function renderPipeline(pipeline, poolSize, returned) {
   if (!pipeline) {
     els.pipelineView.innerHTML =
-      '<p class="empty">No pipeline telemetry in response.</p>';
+      '<p class="empty">No search details available.</p>';
     return;
   }
 
@@ -299,31 +299,31 @@ function renderPipeline(pipeline, poolSize, returned) {
 
   els.pipelineView.innerHTML = `
     <div class="pipeline-pills">
-      ${pill("BM25", pipeline.bm25, "SQLite FTS5 lexical relevance (input-order channel)")}
+      ${pill("Word match", pipeline.bm25, "Checks for the important words from your wish in each home's text.")}
       ${pill(
-        "Visual (SigLIP-2)",
+        "Photo match",
         pipeline.visual,
-        "Requires LISTINGS_VISUAL_ENABLED=1 and the image store loaded",
+        "Compares your wish to every home's photos to find the ones that fit the look.",
       )}
       ${pill(
-        "Semantic (Arctic-Embed)",
+        "Meaning match",
         pipeline.text_embed,
-        "Requires LISTINGS_TEXT_EMBED_ENABLED=1 and the 1024-d matrix loaded",
+        "Reads each home's description and compares its meaning to your wish, even if the words are different.",
       )}
       ${pill(
-        `Soft rankings × ${softCount}`,
+        `Your wishes × ${softCount}`,
         softCount > 0,
-        "One ranking per activated soft preference key",
+        "One sorted list per nice-to-have you asked for (quiet, near schools, cheap, and so on).",
       )}
     </div>
-    <div class="kv"><span class="k">RRF k</span><span class="v">${esc(
-      pipeline.rrf_k,
-    )}</span></div>
-    <div class="kv"><span class="k">Pool after hard filters</span><span class="v">${esc(
+    <div class="kv"><span class="k">Homes we looked through</span><span class="v">${esc(
       poolSize ?? "—",
     )}</span></div>
-    <div class="kv"><span class="k">Returned</span><span class="v">${esc(
+    <div class="kv"><span class="k">Homes we're showing</span><span class="v">${esc(
       returned ?? "—",
+    )}</span></div>
+    <div class="kv"><span class="k">Mixer setting (RRF k)</span><span class="v">${esc(
+      pipeline.rrf_k,
     )}</span></div>`;
 }
 
@@ -337,21 +337,21 @@ function renderPipeline(pipeline, poolSize, returned) {
 function renderBreakdownBar(listings, queryPlan, pipeline) {
   const keywords = (queryPlan && queryPlan.bm25_keywords) || [];
   const hasKeywords = keywords.length > 0;
-  const bm25MissLabel = hasKeywords ? "no match" : "n/a";
+  const bm25MissLabel = hasKeywords ? "no match" : "not used";
   const bm25MissTooltip = hasKeywords
-    ? `None of the LLM-extracted BM25 keywords (${keywords.join(", ")}) appear in this listing's title/description/street/city. BM25 contributes nothing for this listing; it ranks via the other active channels.`
-    : "The LLM did not emit any BM25 keywords for this query, so the BM25 channel is inert — the ranker falls back to input order (listing_id). Other channels do the actual ranking.";
+    ? `We didn't find any of your key words (${keywords.join(", ")}) in this home's title, description, street, or city. The other checks decide its rank.`
+    : "Your search didn't need word matching, so we skipped it here. The other checks decide the rank.";
 
   const visualOn = pipeline && pipeline.visual;
   const semanticOn = pipeline && pipeline.text_embed;
-  const visMissLabel = visualOn ? "no image" : "channel off";
+  const visMissLabel = visualOn ? "no photo" : "turned off";
   const visMissTooltip = visualOn
-    ? "This listing has no photo in the image index (10k of 25,546 listings have none). Visual scoring skips it; other channels still rank it."
-    : "Visual channel is disabled on this server (LISTINGS_VISUAL_ENABLED=0). Turn it on and restart to get SigLIP-2 scores.";
-  const semMissLabel = semanticOn ? "—" : "channel off";
+    ? "This home has no photos we can compare. The other checks still rank it."
+    : "The photo-match feature is off on this server. Ask an admin to turn it on.";
+  const semMissLabel = semanticOn ? "—" : "turned off";
   const semMissTooltip = semanticOn
-    ? "The listing's description embedding is missing. The Arctic-Embed matrix covers all 25,546 listings, so this should not happen — if you see this, check the signals table."
-    : "Semantic channel is disabled on this server (LISTINGS_TEXT_EMBED_ENABLED=0). Turn it on and restart to get Arctic-Embed scores.";
+    ? "We don't have a meaning-match score for this home. That shouldn't happen for homes that have a description — ask an admin to check."
+    : "The meaning-match feature is off on this server. Ask an admin to turn it on.";
 
   const maxRrf = Math.max(
     0.0001,
@@ -410,16 +410,16 @@ function renderBreakdownBar(listings, queryPlan, pipeline) {
         ? 1
         : (breakdown.text_embed_score - minText) / (maxText - minText);
 
-    const softLabel = `${breakdown.soft_signals_activated} ranking${
-      breakdown.soft_signals_activated === 1 ? "" : "s"
+    const softLabel = `${breakdown.soft_signals_activated} wish${
+      breakdown.soft_signals_activated === 1 ? "" : "es"
     }`;
 
     return `
       <div class="breakdown">
-        <div class="breakdown-title">Scoring breakdown</div>
+        <div class="breakdown-title">How we ranked this home</div>
         <div class="breakdown-bars">
           ${row(
-            "RRF (final)",
+            "Final score",
             "rrf",
             breakdown.rrf_score,
             rrfNorm,
@@ -427,11 +427,11 @@ function renderBreakdownBar(listings, queryPlan, pipeline) {
               ? "no score"
               : breakdown.rrf_score.toFixed(4),
             breakdown.rrf_score == null
-              ? "No fused score — this path is reached only when every channel was inert (e.g. the filter endpoint). For the normal /listings flow, this never triggers."
-              : "Final fused score. Sorted by this. Units: sum of 1/(60 + rank_c) across channels.",
+              ? "We couldn't build a final score because none of our checks had anything to say about this home."
+              : "The big score — all the checks below, mixed together. Higher is better.",
           )}
           ${row(
-            "BM25",
+            "Words match",
             "bm25",
             breakdown.bm25_score,
             bm25Norm,
@@ -440,10 +440,10 @@ function renderBreakdownBar(listings, queryPlan, pipeline) {
               : breakdown.bm25_score.toFixed(3),
             breakdown.bm25_score == null
               ? bm25MissTooltip
-              : `SQLite FTS5 bm25() score (sign-flipped so higher = better). Keywords hit: ${keywords.join(", ")}.`,
+              : `How well the key words from your wish show up in this home's text. Words found: ${keywords.join(", ")}.`,
           )}
           ${row(
-            "Visual",
+            "Photos match",
             "visual",
             breakdown.visual_score,
             visNorm,
@@ -452,10 +452,10 @@ function renderBreakdownBar(listings, queryPlan, pipeline) {
               : breakdown.visual_score.toFixed(3),
             breakdown.visual_score == null
               ? visMissTooltip
-              : "Max cosine of query vs. this listing's image embeddings (SigLIP-2 Giant, 1536-d).",
+              : "How well the photos of this home match the kind of place you described.",
           )}
           ${row(
-            "Semantic",
+            "Meaning match",
             "semantic",
             breakdown.text_embed_score,
             txtNorm,
@@ -464,9 +464,9 @@ function renderBreakdownBar(listings, queryPlan, pipeline) {
               : breakdown.text_embed_score.toFixed(3),
             breakdown.text_embed_score == null
               ? semMissTooltip
-              : "Cosine of query vs. description embedding (Snowflake Arctic-Embed-L v2, 1024-d).",
+              : "How close the meaning of this home's description is to what you asked for, even with different words.",
           )}
-          <div class="bar-label" title="Number of soft-preference rankings that joined RRF this turn.">Soft</div>
+          <div class="bar-label" title="How many of your nice-to-haves this home scored well on.">Your wishes</div>
           <div class="bar"><div class="fill soft" style="width:${
             breakdown.soft_signals_activated > 0 ? 100 : 0
           }%"></div></div>
@@ -478,7 +478,7 @@ function renderBreakdownBar(listings, queryPlan, pipeline) {
 
 function renderHardChecks(checks) {
   if (!checks || checks.length === 0) {
-    return '<p class="empty">No hard constraints requested — every listing in the pool is eligible.</p>';
+    return '<p class="empty">You didn\'t set any must-haves, so every home is eligible.</p>';
   }
   const rows = checks
     .map(
@@ -496,9 +496,9 @@ function renderHardChecks(checks) {
       <thead>
         <tr>
           <th></th>
-          <th>constraint</th>
-          <th>requested</th>
-          <th>this listing</th>
+          <th>must-have</th>
+          <th>you asked for</th>
+          <th>this home</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -509,7 +509,7 @@ function renderKeywordHits(md) {
   const matched = md?.matched_keywords || [];
   const missed = md?.unmatched_keywords || [];
   if (matched.length === 0 && missed.length === 0) {
-    return '<p class="empty">No BM25 keywords requested for this query.</p>';
+    return '<p class="empty">Your search didn\'t need specific words.</p>';
   }
   const parts = [];
   if (matched.length) {
@@ -519,11 +519,11 @@ function renderKeywordHits(md) {
   }
   if (missed.length) {
     parts.push(`<div class="kw-row">${missed
-      .map((k) => `<span class="kw miss" title="Requested but not in this listing's text">${esc(k)}</span>`)
+      .map((k) => `<span class="kw miss" title="This word wasn't found in the home's text">${esc(k)}</span>`)
       .join("")}</div>`);
   }
   parts.push(
-    `<p class="muted small" style="margin:4px 0 0 0">Substring check over title, description, street, and city (same fields FTS5 indexes).</p>`,
+    `<p class="muted small" style="margin:4px 0 0 0">We checked the title, description, street, and city for each word.</p>`,
   );
   return parts.join("");
 }
@@ -531,7 +531,7 @@ function renderKeywordHits(md) {
 function renderSoftFacts(md) {
   const facts = md?.soft_facts || [];
   if (facts.length === 0) {
-    return '<p class="empty">LLM did not activate any soft preference axes.</p>';
+    return '<p class="empty">No nice-to-haves to check for this home.</p>';
   }
   return `
     <div class="soft-facts">
@@ -557,21 +557,21 @@ function renderSoftFacts(md) {
 function renderMemoryChannels(bd) {
   if (!bd) return "";
   const fields = [
-    ["Semantic", "memory_semantic", "semantic",
-     "Cosine of query listing description embedding vs your positive-minus-negative description centroid (Arctic-Embed-L, 1024-d)."],
-    ["Visual", "memory_visual", "visual",
-     "Cosine of this listing's best photo embedding vs your positive-listing photo centroid (SigLIP-2 Giant, 1536-d)."],
-    ["Feature", "memory_feature", "feature",
-     "Dot product of this listing's feature presence vs your learned per-feature preference vector."],
+    ["Description", "memory_semantic", "semantic",
+     "Does this home's description sound like the ones you've loved or saved before?"],
+    ["Photos", "memory_visual", "visual",
+     "Do the photos of this home look like the photos of homes you've loved or saved?"],
+    ["Features", "memory_feature", "feature",
+     "Does this home have the features (balcony, elevator, pets, etc.) you usually like?"],
     ["Price", "memory_price", "price",
-     "Inverse distance of log(price) to your personal log-price mean / sigma fitted over positive listings."],
-    ["Composite", "memory_score", "composite",
-     "Mean of the available channels above — the single number the ranker uses."],
+     "Is this home's price close to the prices of homes you usually look at?"],
+    ["Overall", "memory_score", "composite",
+     "The overall taste-match score — the average of the ones above. This is what nudges the ranking."],
   ];
   const anyPresent = fields.some(([_, key]) => bd[key] != null);
   if (!anyPresent) {
     return `<p class="memory-header-note empty">
-      No memory signals for this listing yet. Like or save a few listings, then re-run the search with Personalize on.
+      We don't know your taste for this home yet. Love or save a few homes, then search again with 🪄 <b>Learn from me</b> on.
     </p>`;
   }
   const row = (label, key, cls, tooltip) => {
@@ -593,8 +593,7 @@ function renderMemoryChannels(bd) {
   };
   return `
     <p class="memory-header-note">
-      Each channel is a cosine vs. a vector built from your interaction history.
-      Higher is closer to your taste. Bar centre = 0.
+      These bars show how well this home matches the homes you've loved, saved, or looked at before. Longer bar = better fit.
     </p>
     <div class="memory-channels">
       ${fields.map(([label, key, cls, tip]) => row(label, key, cls, tip)).join("")}
@@ -616,19 +615,19 @@ function renderDetail(res) {
   return `
     <div class="listing-detail">
       <div class="detail-block">
-        <h4>Hard-filter checks <span class="count">${
+        <h4>Does it match what you asked for? <span class="count">${
           (md?.hard_checks || []).length
         }</span></h4>
         ${renderHardChecks(md?.hard_checks)}
 
-        <h4 style="margin-top:14px">BM25 keyword hits <span class="count">${matchedCount}/${
+        <h4 style="margin-top:14px">Words we found in this home <span class="count">${matchedCount}/${
           matchedCount + missedCount
         }</span></h4>
         ${renderKeywordHits(md)}
 
         ${
           memoryActive
-            ? `<h4 style="margin-top:14px">Memory channels <span class="count">${
+            ? `<h4 style="margin-top:14px">How well this fits your taste <span class="count">${
                 bd.memory_rankings_activated
               }</span></h4>
                ${renderMemoryChannels(bd)}`
@@ -638,11 +637,11 @@ function renderDetail(res) {
         <button type="button" class="find-similar-btn" data-similar-id="${esc(
           res.listing_id,
         )}" data-similar-title="${esc(listing.title || res.listing_id)}">
-          🔍 Find visually similar listings
+          🔍 Show me homes that look like this
         </button>
       </div>
       <div class="detail-block">
-        <h4>Soft-preference signals for this listing <span class="count">${
+        <h4>How well it matches your nice-to-haves <span class="count">${
           (md?.soft_facts || []).length
         }</span></h4>
         ${renderSoftFacts(md)}
@@ -666,8 +665,8 @@ function renderDetail(res) {
 function renderListings(listings, meta) {
   els.listings.innerHTML = "";
   if (!listings || listings.length === 0) {
-    els.resultStatus.textContent =
-      "No listings matched the hard filters for this query.";
+    els.resultStatus.innerHTML =
+      '<div class="coldstart-hint"><b>No homes matched your must-haves.</b> Try loosening your search — maybe a wider city, a higher price, or fewer required features.</div>';
     return;
   }
 
@@ -676,10 +675,14 @@ function renderListings(listings, meta) {
   const hiddenDismissed = Number(meta.hidden_dismissed || 0);
   const dismissedToast = hiddenDismissed > 0
     ? `<div class="dismissed-toast">
-         <span><span class="ico">✨</span> ${hiddenDismissed} listing${
+         <span><span class="ico">🙈</span> ${hiddenDismissed} home${
            hiddenDismissed === 1 ? "" : "s"
-         } hidden because you (or look-alike photos of ones you) dismissed.</span>
-         <span class="muted small">Toggle Personalize off to see them.</span>
+         } hidden because ${
+           hiddenDismissed === 1 ? "it's like one" : "they're like ones"
+         } you told us to skip.</span>
+         <span class="muted small">Turn off 🪄 Learn from me to see ${
+           hiddenDismissed === 1 ? "it" : "them"
+         } again.</span>
        </div>`
     : "";
 
@@ -692,20 +695,18 @@ function renderListings(listings, meta) {
   const memoryInactive = authed && wantsPersonalize && !pipeline.memory;
   const coldStart = memoryInactive
     ? `<div class="coldstart-hint">
-         <b>Personalize is on but your history is empty.</b>
-         Like or save <b>at least 3 listings</b> and re-run the search —
-         the semantic / visual / feature / price channels will light up on
-         the expanded detail panel.
+         <b>🪄 Learn from me is on, but we don't know your taste yet.</b>
+         Press <b>💖 Love</b> or <b>⭐ Save</b> on at least <b>3 homes</b> you like, then search again. We'll start showing you more of what fits your taste.
        </div>`
     : "";
 
   els.resultStatus.innerHTML = `
     ${dismissedToast}
     ${coldStart}
-    <b>${listings.length}</b> listings (of ${
+    Found <b>${listings.length} homes</b> (out of ${
     meta.candidate_pool_size ?? "?"
-  } after hard-filter gate).
-    <span class="sort-hint">Sorted by RRF score (highest first) · click any card for the full match breakdown</span>
+  } that passed your must-haves).
+    <span class="sort-hint">Best match first · tap any card for the full breakdown</span>
   `;
 
   const barFactory = renderBreakdownBar(
@@ -745,17 +746,17 @@ function renderListings(listings, meta) {
               ? `<img src="${esc(images[0])}" alt="${esc(listing.title)}" loading="lazy" />
                 ${
                   images.length > 1
-                    ? `<button class="img-nav prev" aria-label="Previous">‹</button>
-                       <button class="img-nav next" aria-label="Next">›</button>
+                    ? `<button class="img-nav prev" aria-label="Previous photo">‹</button>
+                       <button class="img-nav next" aria-label="Next photo">›</button>
                        <div class="img-count">1 / ${images.length}</div>`
                     : ""
                 }`
-              : '<div class="no-image">No image</div>'
+              : '<div class="no-image">No photo</div>'
           }
         </div>
         <div class="listing-body">
           <div class="listing-head">
-            <h3 class="listing-title">${esc(listing.title || "(untitled)")}</h3>
+            <h3 class="listing-title">${esc(listing.title || "(no title)")}</h3>
             <div class="rank-score">
               <div class="rank ${isTop ? "top" : ""}">#${idx + 1}${
                 isTop ? '<span class="rank-badge-top">TOP</span>' : ""
@@ -775,30 +776,30 @@ function renderListings(listings, meta) {
                   }" aria-pressed="${isLiked}" data-action="like"
                     title="${
                       isLiked
-                        ? "Remove like (stops boosting similar listings)"
-                        : "Like this listing · boosts similar listings in your results"
-                    }">${isLiked ? "♥ Liked" : "♡ Like"}</button>
+                        ? "Tap to un-love it (we'll stop looking for similar homes)"
+                        : "I love this one! (we'll show you more like it)"
+                    }">${isLiked ? "💖 Loved" : "♡ Love"}</button>
             <button type="button" class="listing-action save-btn${
               isBookmarked ? " saved" : ""
             }" aria-pressed="${isBookmarked}" data-action="save"
                     title="${
                       isBookmarked
-                        ? "Remove from your Saved list"
-                        : "Save to your Saved list · also boosts similar listings (stronger than a like)"
-                    }">${isBookmarked ? "★ Saved" : "☆ Save"}</button>
+                        ? "Take it off your favorites"
+                        : "Save it to your favorites (we'll show more like it)"
+                    }">${isBookmarked ? "⭐ Saved" : "☆ Save"}</button>
             <button type="button" class="listing-action dismiss-btn${
               isDismissed ? " dismissed" : ""
             }" aria-pressed="${isDismissed}" data-action="dismiss"
                     title="${
                       isDismissed
-                        ? "Bring this listing back (removes the negative signal)"
-                        : "Hide and record a negative signal"
-                    }">${isDismissed ? "↶ Undo" : "✕ Not for me"}</button>`
+                        ? "Bring it back"
+                        : "Hide this home (we won't show it again)"
+                    }">${isDismissed ? "↩️ Bring back" : "🙈 Hide"}</button>`
                 : ""
             }
             ${
               memBoost
-                ? `<div class="memory-badge" title="This listing was boosted by your saved / liked / dwelled history">✨ personalized</div>`
+                ? `<div class="memory-badge" title="We picked this one because it fits your taste">✨ picked for you</div>`
                 : ""
             }
           </div>`
@@ -845,7 +846,7 @@ function renderListings(listings, meta) {
                 : ""
             }
           </div>
-          <div class="expand-hint">click for hard-check table, keyword hits, and soft-signal values ↓</div>
+          <div class="expand-hint">Tap for the full breakdown ↓</div>
         </div>
       </div>`;
 
@@ -905,13 +906,13 @@ function renderListings(listings, meta) {
         const detail = card.querySelector(".listing-detail");
         if (detail) detail.remove();
         card.querySelector(".expand-hint").textContent =
-          "click for hard-check table, keyword hits, and soft-signal values ↓";
+          "Tap for the full breakdown ↓";
       } else {
         card.classList.add("expanded");
         card.setAttribute("aria-expanded", "true");
         card.insertAdjacentHTML("beforeend", renderDetail(res));
         card.querySelector(".expand-hint").textContent =
-          "click again to collapse ↑";
+          "Tap again to close ↑";
         // Implicit positive: card was deliberately expanded.
         postInteraction(listingId, "click");
         // Tier 4: wire the "Find similar" button now that it exists in the DOM.
@@ -1093,21 +1094,21 @@ function setAuthMode(mode) {
   if (userInput && mode !== "account") userInput.value = "";
 
   if (mode === "login") {
-    els.authModalTitle.textContent = "Sign in";
+    els.authModalTitle.textContent = "Log in";
     showField("username", true);
     showField("password", true);
     document.getElementById("auth-password-input").autocomplete = "current-password";
-    els.authSubmit.textContent = "Sign in";
+    els.authSubmit.textContent = "Log in";
   } else if (mode === "register") {
-    els.authModalTitle.textContent = "Create account";
+    els.authModalTitle.textContent = "Create your account";
     showField("username", true);
     showField("email", true);
     showField("password", true);
     showField("password-hint", true);
     document.getElementById("auth-password-input").autocomplete = "new-password";
-    els.authSubmit.textContent = "Create account";
+    els.authSubmit.textContent = "Sign up";
   } else if (mode === "account") {
-    els.authModalTitle.textContent = "Account";
+    els.authModalTitle.textContent = "⚙ Account";
     showField("password", true);
     showField("new-password", true);
     showField("account-actions", true);
@@ -1146,11 +1147,11 @@ async function handleAuthSubmit(ev) {
         body: JSON.stringify({ username, password }),
       });
       if (r.status === 429) {
-        setAuthError("Too many login attempts. Wait a few minutes and retry.");
+        setAuthError("Too many tries. Wait a few minutes, then try again.");
         return;
       }
       if (!r.ok) {
-        setAuthError("Invalid credentials.");
+        setAuthError("That username or password isn't right.");
         return;
       }
       const user = await r.json();
@@ -1175,7 +1176,7 @@ async function handleAuthSubmit(ev) {
         body: JSON.stringify({ username, email, password }),
       });
       if (r.status === 409) {
-        setAuthError("That username or email is already taken.");
+        setAuthError("That name or email is already taken. Try a different one.");
         return;
       }
       if (!r.ok) {
@@ -1191,7 +1192,7 @@ async function handleAuthSubmit(ev) {
     } else if (mode === "account") {
       const newPassword = document.getElementById("auth-new-password-input").value;
       if (!newPassword) {
-        setAuthError("Enter a new password to update.");
+        setAuthError("Type your new password.");
         return;
       }
       const r = await authJson("/auth/change-password", {
@@ -1202,7 +1203,7 @@ async function handleAuthSubmit(ev) {
         }),
       });
       if (r.status === 401) {
-        setAuthError("Current password is wrong.");
+        setAuthError("Your current password isn't right.");
         return;
       }
       if (!r.ok) {
@@ -1216,7 +1217,7 @@ async function handleAuthSubmit(ev) {
       closeAuthModal();
     }
   } catch (e) {
-    setAuthError(`Network error: ${e.message}`);
+    setAuthError(`Can't reach the server: ${e.message}`);
   } finally {
     els.authSubmit.disabled = false;
   }
@@ -1248,10 +1249,10 @@ async function handleLogout() {
 async function handleDeleteAccount() {
   const password = document.getElementById("auth-password-input").value;
   if (!password) {
-    setAuthError("Enter your current password to confirm.");
+    setAuthError("Type your current password to confirm.");
     return;
   }
-  if (!window.confirm("Permanently delete your account and all saved listings?")) {
+  if (!window.confirm("Really delete your account, your saved homes, and everything we learned about your taste? This can't be undone.")) {
     return;
   }
   try {
@@ -1260,18 +1261,18 @@ async function handleDeleteAccount() {
       body: JSON.stringify({ password }),
     });
     if (r.status === 401) {
-      setAuthError("Password is wrong.");
+      setAuthError("That password isn't right.");
       return;
     }
     if (!r.ok) {
-      setAuthError("Could not delete account.");
+      setAuthError("Couldn't delete your account.");
       return;
     }
     authState.csrfToken = null;
     setAuthUI(null);
     closeAuthModal();
   } catch (e) {
-    setAuthError(`Network error: ${e.message}`);
+    setAuthError(`Can't reach the server: ${e.message}`);
   }
 }
 
@@ -1308,7 +1309,7 @@ async function _toggleInteraction({
 }) {
   if (!authState.user) {
     openAuthModal("login");
-    setAuthError("Sign in to personalize your results.");
+    setAuthError("Log in so we can learn from your choices.");
     return;
   }
   const wasOn = stateSet.has(listingId);
@@ -1354,7 +1355,7 @@ function toggleBookmark(listingId, buttonEl) {
 function toggleDismiss(listingId, buttonEl, cardEl) {
   if (!authState.user) {
     openAuthModal("login");
-    setAuthError("Sign in to dismiss listings.");
+    setAuthError("Log in to hide homes you don't want to see.");
     return;
   }
   const wasDismissed = authState.dismissedIds.has(listingId);
@@ -1383,7 +1384,8 @@ function toggleDismiss(listingId, buttonEl, cardEl) {
     // Surface the failure so the silent snap-back doesn't look like a bug.
     // Most common cause: running server was started before the ``undismiss``
     // kind was added to the backend schema; it now rejects with 422.
-    setStatus(`${kind} failed (restart server?)`, "err");
+    const verb = kind === "dismiss" ? "hide" : "bring back";
+    setStatus(`Couldn't ${verb} (try reloading)`, "err");
     console.warn(`${kind} failed`, err);
   });
 }
@@ -1393,9 +1395,9 @@ function renderDismissButton(buttonEl, dismissed) {
   buttonEl.classList.toggle("dismissed", !!dismissed);
   buttonEl.setAttribute("aria-pressed", dismissed ? "true" : "false");
   buttonEl.title = dismissed
-    ? "Bring this listing back (removes the negative signal)"
-    : "Hide and record a negative signal";
-  buttonEl.textContent = dismissed ? "↶ Undo" : "✕ Not for me";
+    ? "Bring it back"
+    : "Hide this home (we won't show it again)";
+  buttonEl.textContent = dismissed ? "↩️ Bring back" : "🙈 Hide";
 }
 
 function renderLikeButton(buttonEl, liked) {
@@ -1403,9 +1405,9 @@ function renderLikeButton(buttonEl, liked) {
   buttonEl.classList.toggle("liked", !!liked);
   buttonEl.setAttribute("aria-pressed", liked ? "true" : "false");
   buttonEl.title = liked
-    ? "Remove like (stops boosting similar listings)"
-    : "Like this listing · boosts similar listings in your results";
-  buttonEl.textContent = liked ? "♥ Liked" : "♡ Like";
+    ? "Tap to un-love it (we'll stop looking for similar homes)"
+    : "I love this one! (we'll show you more like it)";
+  buttonEl.textContent = liked ? "💖 Loved" : "♡ Love";
 }
 
 function renderBookmarkButton(buttonEl, saved) {
@@ -1413,9 +1415,9 @@ function renderBookmarkButton(buttonEl, saved) {
   buttonEl.classList.toggle("saved", !!saved);
   buttonEl.setAttribute("aria-pressed", saved ? "true" : "false");
   buttonEl.title = saved
-    ? "Remove from your Saved list"
-    : "Save to your Saved list · also boosts similar listings (stronger than a like)";
-  buttonEl.textContent = saved ? "★ Saved" : "☆ Save";
+    ? "Take it off your favorites"
+    : "Save it to your favorites (we'll show more like it)";
+  buttonEl.textContent = saved ? "⭐ Saved" : "☆ Save";
 }
 
 async function openFavorites() {
@@ -1426,7 +1428,7 @@ async function openFavorites() {
   const host = els.favoritesList;
   if (!favs.length) {
     host.innerHTML =
-      '<p class="muted">No saved listings yet. Click the ☆ on any card to save it to this list.</p>';
+      '<p class="empty-state"><span class="empty-ico">💭</span>No saved homes yet. Tap <b>⭐ Save</b> on any card to add it here.</p>';
   } else {
     host.innerHTML = favs.map(renderFavoriteRow).join("");
     // Wire click → detail modal. Using event delegation on the list host
@@ -1462,12 +1464,12 @@ function renderFavoriteRow(f) {
       <div class="fav-thumb">
         ${
           f.hero_image_url
-            ? `<img src="${esc(f.hero_image_url)}" alt="${esc(f.title || "saved listing")}" loading="lazy" />`
-            : '<div class="fav-thumb-empty">No image</div>'
+            ? `<img src="${esc(f.hero_image_url)}" alt="${esc(f.title || "saved home")}" loading="lazy" />`
+            : '<div class="fav-thumb-empty">No photo</div>'
         }
       </div>
       <div class="fav-body">
-        <div class="fav-title">${esc(f.title || "(untitled listing)")}</div>
+        <div class="fav-title">${esc(f.title || "(no title)")}</div>
         <div class="fav-meta">
           <strong>${price}</strong>
           <span>· ${esc(rooms)}</span>
@@ -1522,12 +1524,12 @@ async function openListingDetail(listingId) {
       credentials: "same-origin",
     });
     if (!r.ok) {
-      els.detailBody.innerHTML = `<p class="empty">Could not load listing (HTTP ${r.status}).</p>`;
+      els.detailBody.innerHTML = `<p class="empty">Couldn't load this home (error ${r.status}).</p>`;
       return;
     }
     data = await r.json();
   } catch (e) {
-    els.detailBody.innerHTML = `<p class="empty">Network error: ${esc(e.message)}</p>`;
+    els.detailBody.innerHTML = `<p class="empty">Can't reach the server: ${esc(e.message)}</p>`;
     return;
   }
   renderListingDetail(data);
@@ -1550,9 +1552,9 @@ function closeDetail() {
 async function openSimilarModal(listingId, sourceTitle) {
   if (!els.similarModal) return;
   els.similarTitle.textContent = sourceTitle
-    ? `Similar to "${sourceTitle}"`
-    : "Visually similar";
-  els.similarBody.innerHTML = '<p class="muted">Loading DINOv2 similarity…</p>';
+    ? `🔍 Homes that look like "${sourceTitle}"`
+    : "🔍 Homes that look like this";
+  els.similarBody.innerHTML = '<p class="muted">Looking for homes that look like this…</p>';
   if (typeof els.similarModal.showModal === "function") {
     els.similarModal.showModal();
   } else {
@@ -1566,29 +1568,29 @@ async function openSimilarModal(listingId, sourceTitle) {
       { credentials: "same-origin" },
     );
     if (r.status === 503) {
-      els.similarBody.innerHTML = `<p class="empty">DINOv2 reverse-image search is disabled on this server. Start uvicorn with <code>LISTINGS_DINOV2_ENABLED=1</code> to enable.</p>`;
+      els.similarBody.innerHTML = `<p class="empty">The look-alike-homes feature is turned off on this server. Ask an admin to enable it.</p>`;
       return;
     }
     if (!r.ok) {
-      els.similarBody.innerHTML = `<p class="empty">Failed (HTTP ${r.status}).</p>`;
+      els.similarBody.innerHTML = `<p class="empty">Couldn't load look-alikes (error ${r.status}).</p>`;
       return;
     }
     data = await r.json();
   } catch (e) {
-    els.similarBody.innerHTML = `<p class="empty">Network error: ${esc(e.message)}</p>`;
+    els.similarBody.innerHTML = `<p class="empty">Can't reach the server: ${esc(e.message)}</p>`;
     return;
   }
 
   const results = data.results || [];
   if (!results.length) {
-    const note = (data.meta && data.meta.note) || "No similar listings in the index.";
+    const note = (data.meta && data.meta.note) || "No homes with similar-looking photos found.";
     els.similarBody.innerHTML = `<p class="empty">${esc(note)}</p>`;
     return;
   }
 
   const meta = data.meta || {};
   const metaLine = `<p class="muted small" style="margin:0 0 10px 0">
-    Model: ${esc(meta.model || "?")} · returned ${esc(meta.k_returned ?? results.length)} of top ${esc(meta.k_requested ?? "?")} · ${esc(meta.aggregation || "max cosine")}
+    We found ${esc(meta.k_returned ?? results.length)} look-alikes (out of ${esc(meta.k_requested ?? "?")} we checked). Tap any one to see it in full.
   </p>`;
 
   const cards = results.map((r) => {
@@ -1598,8 +1600,8 @@ async function openSimilarModal(listingId, sourceTitle) {
       ${img ? `<img src="${esc(img)}" alt="${esc(L.title || "")}" loading="lazy" />` : ""}
       <div class="body">
         <div class="title">${esc(L.title || r.listing_id)}</div>
-        <div class="meta">${esc(chf(L.price_chf))} · ${esc(L.rooms ?? "?")} rm · ${esc(L.city || "")}</div>
-        <div class="cosine">cosine ${r.cosine.toFixed(3)}</div>
+        <div class="meta">${esc(chf(L.price_chf))} · ${esc(L.rooms ?? "?")} rooms · ${esc(L.city || "")}</div>
+        <div class="cosine">match ${(r.cosine * 100).toFixed(0)}%</div>
       </div>
     </div>`;
   }).join("");
@@ -1624,7 +1626,7 @@ function closeSimilarModal() {
 }
 
 function renderListingDetail(L) {
-  els.detailTitle.textContent = L.title || "(untitled listing)";
+  els.detailTitle.textContent = L.title || "(no title)";
   const images = [L.hero_image_url, ...(L.image_urls || [])]
     .filter(Boolean)
     .filter((v, i, a) => a.indexOf(v) === i);
@@ -1640,24 +1642,24 @@ function renderListingDetail(L) {
     L.rooms != null ? `${esc(L.rooms)} rooms` : "",
     L.living_area_sqm != null ? `${esc(L.living_area_sqm)} m²` : "",
     L.object_category ? esc(L.object_category) : "",
-    L.available_from ? `avail. ${esc(L.available_from)}` : "",
+    L.available_from ? `available ${esc(L.available_from)}` : "",
   ].filter(Boolean);
 
   els.detailBody.innerHTML = `
     <div class="detail-media">
       ${
         images.length
-          ? `<img class="detail-hero" src="${esc(images[0])}" alt="${esc(L.title || "listing")}" />
+          ? `<img class="detail-hero" src="${esc(images[0])}" alt="${esc(L.title || "home")}" />
              ${
                images.length > 1
                  ? `<div class="detail-carousel">
-                      <button type="button" class="img-nav prev" aria-label="Previous">‹</button>
-                      <button type="button" class="img-nav next" aria-label="Next">›</button>
+                      <button type="button" class="img-nav prev" aria-label="Previous photo">‹</button>
+                      <button type="button" class="img-nav next" aria-label="Next photo">›</button>
                       <div class="img-count">1 / ${images.length}</div>
                     </div>`
                  : ""
              }`
-          : '<div class="detail-no-image">No image on file</div>'
+          : '<div class="detail-no-image">No photo available</div>'
       }
     </div>
     <div class="detail-meta">${metaParts.join(" · ")}</div>
@@ -1672,13 +1674,13 @@ function renderListingDetail(L) {
     ${
       L.description
         ? `<div class="detail-desc">${sanitizeDescriptionHtml(L.description)}</div>`
-        : '<p class="muted small">No description on file.</p>'
+        : '<p class="muted small">No description available.</p>'
     }
     <div class="detail-footer">
       <kbd>${esc(L.id)}</kbd>
       ${
         L.original_listing_url
-          ? ` · <a href="${esc(L.original_listing_url)}" target="_blank" rel="noopener">open source listing ↗</a>`
+          ? ` · <a href="${esc(L.original_listing_url)}" target="_blank" rel="noopener">open on the original site ↗</a>`
           : ""
       }
     </div>
@@ -1705,7 +1707,7 @@ async function clearHistory() {
   if (!authState.user) return;
   if (
     !window.confirm(
-      "Wipe all interaction history (likes, saves, dismissals, dwell)?",
+      "Erase everything we've learned about your taste (loves, saves, and hides)? This can't be undone.",
     )
   ) {
     return;
@@ -1776,7 +1778,7 @@ const dwellTracker = {
 // ---------- data flow --------------------------------------------------------
 
 async function runQuery(query, limit) {
-  setStatus("extracting…", "loading");
+  setStatus("Thinking…", "loading");
   els.listings.innerHTML = "";
   els.resultStatus.textContent = "";
   els.metaPanel.hidden = true;
@@ -1792,19 +1794,19 @@ async function runQuery(query, limit) {
       body: JSON.stringify({ query, limit, offset: 0, personalize }),
     });
   } catch (e) {
-    setStatus("network error", "err");
-    els.resultStatus.innerHTML = `<div class="error">Fetch failed: ${esc(
+    setStatus("Can't reach the server", "err");
+    els.resultStatus.innerHTML = `<div class="error">Couldn't reach the server: ${esc(
       e.message,
-    )}. Is the FastAPI server running on this origin?</div>`;
+    )}. Is the server running?</div>`;
     return;
   }
 
   if (!response.ok) {
     const body = await response.text();
-    setStatus(`HTTP ${response.status}`, "err");
-    els.resultStatus.innerHTML = `<div class="error">Server returned ${
+    setStatus(`Error ${response.status}`, "err");
+    els.resultStatus.innerHTML = `<div class="error">The server ran into a problem (error ${
       response.status
-    }:\n${esc(body)}</div>`;
+    }):\n${esc(body)}</div>`;
     return;
   }
 
@@ -1812,14 +1814,15 @@ async function runQuery(query, limit) {
   try {
     data = await response.json();
   } catch (e) {
-    setStatus("bad JSON", "err");
-    els.resultStatus.innerHTML = `<div class="error">Could not parse response as JSON: ${esc(
+    setStatus("Couldn't read the answer", "err");
+    els.resultStatus.innerHTML = `<div class="error">Got a response, but couldn't read it: ${esc(
       e.message,
     )}</div>`;
     return;
   }
 
-  setStatus(`ok · ${data.listings?.length ?? 0} results`, "ok");
+  const n = data.listings?.length ?? 0;
+  setStatus(`Found ${n} home${n === 1 ? "" : "s"}`, "ok");
 
   const meta = data.meta || {};
   els.metaPanel.hidden = false;
@@ -1919,4 +1922,4 @@ hydrateAuthState().catch((e) => {
   console.warn("auth hydrate failed", e);
 });
 
-setStatus("ready", "ok");
+setStatus("Ready", "ok");
