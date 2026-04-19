@@ -120,6 +120,25 @@
       </div>
     </dialog>
 
+    <!-- DINOv2 "find similar" modal (Tier 4). Image-to-image reverse search
+         driven by the 71,165-image DINOv2 ViT-L/14 store. -->
+    <dialog id="similar-modal" class="modal similar-modal" aria-labelledby="similar-modal-title">
+      <div class="modal-inner">
+        <header class="modal-head">
+          <h2 id="similar-modal-title">Visually similar</h2>
+          <button type="button" class="modal-close" aria-label="Close" data-similar-close>×</button>
+        </header>
+        <p class="muted small" id="similar-modal-note">
+          Finds listings whose photos look most like the source listing.
+          Powered by DINOv2 ViT-L/14 global descriptors (1024-d, L2-normalized,
+          max cosine per listing). Image-only — no text, no filters.
+        </p>
+        <div class="modal-body" id="similar-modal-body">
+          <p class="muted">Loading…</p>
+        </div>
+      </div>
+    </dialog>
+
     <section class="search-panel">
       <form id="search-form">
         <label for="query">

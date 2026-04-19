@@ -12,9 +12,10 @@ from app.api.routes.interactions import router as interactions_router
 from app.api.routes.listings import router as listings_router
 from app.auth.db import bootstrap_users_db
 from app.config import get_settings
+from app.core.dinov2_search import dinov2_enabled, load_dinov2_index
 from app.core.text_embed_search import load_text_embed_index, text_embed_enabled
 from app.core.visual_search import load_visual_index, visual_enabled
-from app.harness.bootstrap import bootstrap_database
+from app.harness.bootstrap import bootstrap_database, validate_ranker_schema
 
 
 @asynccontextmanager
@@ -22,6 +23,10 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     bootstrap_database(db_path=settings.db_path, raw_data_dir=settings.raw_data_dir)
     bootstrap_users_db(settings.users_db_path)
+    # Tier 1.2: surface any missing signal columns / tables loudly at startup.
+    # Every _safe_row_get(None) in the ranker is a silent channel loss; this
+    # consolidated check makes them visible before the first request.
+    validate_ranker_schema(settings.db_path)
     if visual_enabled():
         load_visual_index()
     else:
@@ -38,6 +43,22 @@ async def lifespan(app: FastAPI):
             "[WARN] text_embed_disabled_by_env: LISTINGS_TEXT_EMBED_ENABLED=0, "
             "skipping Arctic-Embed load, expected=text re-ranker, "
             "fallback=BM25+visual-only ranking",
+            flush=True,
+        )
+    if dinov2_enabled():
+        try:
+            load_dinov2_index()
+        except FileNotFoundError as exc:
+            print(
+                f"[WARN] dinov2_load_failed: expected=dinov2_store on disk, "
+                f"got={exc}, fallback=/listings/{{id}}/similar returns 503",
+                flush=True,
+            )
+    else:
+        print(
+            "[WARN] dinov2_disabled_by_env: LISTINGS_DINOV2_ENABLED=0, "
+            "skipping DINOv2 load, expected=find-similar endpoint, "
+            "fallback=/listings/{id}/similar returns 503",
             flush=True,
         )
     yield

@@ -146,3 +146,168 @@ def _schema_matches(db_path: Path) -> bool:
         }
 
     return required_columns <= columns
+
+
+# ---------------------------------------------------------------------------
+# Ranker-signal schema validator (Tier 1.2 — no silent fallbacks)
+#
+# The ranker and match-explanation modules read dozens of columns by name. If
+# any are missing from the running DB, the `_safe_row_get` helper currently
+# returns ``None`` quietly, meaning an entire ranking channel can vanish
+# without any diagnostic. This validator is called from the FastAPI lifespan
+# after ``bootstrap_database`` so every server start logs any gaps in a
+# single consolidated ``[WARN]`` block — the operator sees what's broken
+# before the first user query.
+
+
+_EXPECTED_SIGNAL_COLUMNS: tuple[str, ...] = (
+    "price_baseline_chf_canton_rooms",
+    "price_baseline_chf_plz_rooms",
+    "price_delta_pct_canton_rooms",
+    "price_delta_pct_plz_rooms",
+    "price_baseline_n_canton_rooms",
+    "price_baseline_n_plz_rooms",
+    "price_plausibility",
+    "dist_nearest_stop_m",
+    "nearest_stop_name",
+    "nearest_stop_id",
+    "nearest_stop_type",
+    "nearest_stop_lines_count",
+    "nearest_stop_lines_count_clamped",
+    "nearest_stop_lines_log",
+    "poi_supermarket_300m",
+    "poi_supermarket_1km",
+    "poi_school_1km",
+    "poi_kindergarten_500m",
+    "poi_playground_500m",
+    "poi_pharmacy_500m",
+    "poi_clinic_1km",
+    "poi_gym_500m",
+    "poi_park_500m",
+    "poi_restaurant_300m",
+    "dist_motorway_m",
+    "dist_primary_road_m",
+    "dist_rail_m",
+)
+
+_EXPECTED_COMMUTE_PROXY = tuple(
+    f"commute_proxy_{city}_min"
+    for city in (
+        "zurich", "bern", "basel", "geneve",
+        "lausanne", "lugano", "winterthur", "st_gallen",
+    )
+)
+
+
+def validate_ranker_schema(db_path: Path) -> dict[str, list[str]]:
+    """Log one consolidated [WARN] per missing column family + table.
+
+    Returns a dict of findings so callers / tests can inspect them. Never
+    raises — a missing column is a degradation, not a startup-blocker — but
+    every gap is announced loudly.
+
+    Checks, in order:
+      1. Required signal columns on ``listings_ranking_signals``.
+      2. Every ``dist_landmark_<key>_m`` listed in ``data/ranking/landmarks.json``.
+      3. Every ``commute_proxy_<city>_min`` used by the HB commute-target schema.
+      4. ``listing_commute_times`` table (r5py GTFS truth — orphaned in the
+         current wiring but read by the Tier 2 upgrade).
+      5. ``listings_fts`` virtual table (FTS5 is the BM25 channel; its absence
+         causes every ``POST /listings`` to 500).
+    """
+    from app.core import landmarks as _landmarks_mod
+
+    findings: dict[str, list[str]] = {
+        "missing_signal_columns": [],
+        "missing_dist_landmark_columns": [],
+        "missing_commute_proxy_columns": [],
+        "missing_tables": [],
+    }
+
+    try:
+        with get_connection(db_path) as conn:
+            signal_cols = {
+                row[1]
+                for row in conn.execute(
+                    "PRAGMA table_info(listings_ranking_signals)"
+                ).fetchall()
+            }
+            table_names = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+                ).fetchall()
+            }
+    except sqlite3.Error as exc:
+        print(
+            f"[WARN] validate_ranker_schema: expected=readable DB at {db_path}, "
+            f"got={type(exc).__name__}: {exc}, fallback=validator skipped",
+            flush=True,
+        )
+        return findings
+
+    for col in _EXPECTED_SIGNAL_COLUMNS:
+        if col not in signal_cols:
+            findings["missing_signal_columns"].append(col)
+
+    # Landmark gazetteer: one dist_landmark_<key>_m column per resolved entry.
+    try:
+        for lm in _landmarks_mod.all_landmarks():
+            col = _landmarks_mod.column_for(lm.key)
+            if col not in signal_cols:
+                findings["missing_dist_landmark_columns"].append(col)
+    except Exception as exc:  # gazetteer file missing / malformed
+        print(
+            f"[WARN] validate_ranker_schema.landmarks: expected=readable "
+            f"landmarks.json, got={type(exc).__name__}: {exc}, "
+            f"fallback=landmark column check skipped",
+            flush=True,
+        )
+
+    for col in _EXPECTED_COMMUTE_PROXY:
+        if col not in signal_cols:
+            findings["missing_commute_proxy_columns"].append(col)
+
+    for required_table in ("listings_fts", "listing_commute_times"):
+        if required_table not in table_names:
+            findings["missing_tables"].append(required_table)
+
+    # Emit ONE consolidated WARN per family so logs stay readable.
+    for family, label, consequence in (
+        (
+            "missing_signal_columns", "ranker_signal_columns",
+            "affected_channels=price/transit/POI/noise soft rankings + match_explain facts",
+        ),
+        (
+            "missing_dist_landmark_columns", "landmark_distance_columns",
+            "affected_channels=near_landmark soft ranking + landmark MatchFacts",
+        ),
+        (
+            "missing_commute_proxy_columns", "commute_proxy_columns",
+            "affected_channels=commute_target soft ranking (Tier 2 upgrade uses listing_commute_times instead)",
+        ),
+        (
+            "missing_tables", "required_tables",
+            "FTS5 missing -> every /listings request returns 500; "
+            "listing_commute_times missing -> real r5py commute facts disabled",
+        ),
+    ):
+        if findings[family]:
+            missing_preview = ", ".join(findings[family][:10])
+            n_missing = len(findings[family])
+            print(
+                f"[WARN] schema_validator.{label}: expected=present in "
+                f"{db_path}, got={n_missing} missing ({missing_preview}"
+                f"{'...' if n_missing > 10 else ''}), "
+                f"consequence={consequence}",
+                flush=True,
+            )
+
+    if not any(findings.values()):
+        print(
+            f"[INFO] schema_validator: all expected columns + tables present "
+            f"in {db_path}",
+            flush=True,
+        )
+
+    return findings

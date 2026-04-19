@@ -236,6 +236,7 @@ def test_post_listings_response_carries_demo_contract(
     for item in body["listings"]:
         bd = item["breakdown"]
         assert bd is not None
+        # Tier 3a extended this with 4 per-channel memory fields.
         assert set(bd) == {
             "rrf_score",
             "bm25_score",
@@ -244,6 +245,10 @@ def test_post_listings_response_carries_demo_contract(
             "soft_signals_activated",
             "memory_rankings_activated",
             "memory_score",
+            "memory_semantic",
+            "memory_visual",
+            "memory_feature",
+            "memory_price",
         }
         # With no keyword match, bm25_score is None, not a huge sentinel.
         assert bd["bm25_score"] is None or bd["bm25_score"] > 0
@@ -251,6 +256,11 @@ def test_post_listings_response_carries_demo_contract(
         # Anonymous callers never trigger the memory channel.
         assert bd["memory_rankings_activated"] == 0
         assert bd["memory_score"] is None
+        # All four per-channel memory fields are None for anonymous callers.
+        assert bd["memory_semantic"] is None
+        assert bd["memory_visual"] is None
+        assert bd["memory_feature"] is None
+        assert bd["memory_price"] is None
 
     # Every returned listing must also carry match_detail, shaped for the UI.
     for item in body["listings"]:

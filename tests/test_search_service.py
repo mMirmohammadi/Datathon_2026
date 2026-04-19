@@ -72,11 +72,13 @@ class TestRerankHybridChannels:
         )
 
     def test_empty_candidates_returns_empty(self, tmp_path) -> None:
-        assert _rerank_hybrid([], "q", None, tmp_path / "db") == []
+        out, dismissed = _rerank_hybrid([], "q", None, tmp_path / "db")
+        assert out == []
+        assert dismissed == 0
 
     def test_bm25_only_attaches_rrf_score(self, tmp_path) -> None:
         cands = [{"listing_id": "L1"}, {"listing_id": "L2"}]
-        out = _rerank_hybrid(cands, "q", None, tmp_path / "db")
+        out, _ = _rerank_hybrid(cands, "q", None, tmp_path / "db")
         # BM25 alone: L1 rank 1 -> 1/61; L2 rank 2 -> 1/62. L1 wins.
         assert out[0]["listing_id"] == "L1"
         assert out[0]["rrf_score"] == pytest.approx(1 / 61)
@@ -88,7 +90,7 @@ class TestRerankHybridChannels:
     def test_visual_boost_reorders(self, tmp_path, monkeypatch) -> None:
         _activate_visual(monkeypatch, {"L2": 0.9})
         cands = [{"listing_id": "L1"}, {"listing_id": "L2"}]
-        out = _rerank_hybrid(cands, "q", None, tmp_path / "db")
+        out, _ = _rerank_hybrid(cands, "q", None, tmp_path / "db")
         # L1 only in BM25 rank 1; L2 in BM25 rank 2 AND visual rank 1 -> sum wins.
         assert out[0]["listing_id"] == "L2"
         assert out[0]["visual_score"] == 0.9
@@ -96,7 +98,7 @@ class TestRerankHybridChannels:
     def test_text_embed_boost_reorders(self, tmp_path, monkeypatch) -> None:
         _activate_text_embed(monkeypatch, {"L3": 0.8})
         cands = [{"listing_id": lid} for lid in ("L1", "L2", "L3")]
-        out = _rerank_hybrid(cands, "q", None, tmp_path / "db")
+        out, _ = _rerank_hybrid(cands, "q", None, tmp_path / "db")
         # L3 appears in BM25 rank 3 AND text_embed rank 1. L1 BM25 rank 1.
         # L3 rrf = 1/63 + 1/61, L1 rrf = 1/61. L3 wins.
         assert out[0]["listing_id"] == "L3"
@@ -110,7 +112,7 @@ class TestRerankHybridChannels:
             lambda c, s, d: [["L1"], ["L2"]],  # two soft rankings
         )
         cands = [{"listing_id": lid} for lid in ("L1", "L2", "L3")]
-        out = _rerank_hybrid(cands, "q", SoftPreferences(quiet=True), tmp_path / "db")
+        out, _ = _rerank_hybrid(cands, "q", SoftPreferences(quiet=True), tmp_path / "db")
         # soft_signals_activated should equal 2.
         assert all(c["soft_signals_activated"] == 2 for c in out)
 

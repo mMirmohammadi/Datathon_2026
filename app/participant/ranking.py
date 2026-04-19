@@ -66,6 +66,10 @@ def _to_breakdown(candidate: dict[str, Any]) -> RankingBreakdown:
     soft_count = candidate.get("soft_signals_activated")
     memory_count = candidate.get("memory_rankings_activated")
     memory_score = candidate.get("memory_score")
+    mem_sem = candidate.get("memory_semantic")
+    mem_vis = candidate.get("memory_visual")
+    mem_feat = candidate.get("memory_feature")
+    mem_price = candidate.get("memory_price")
     rrf = candidate.get("rrf_score")
 
     return RankingBreakdown(
@@ -76,6 +80,10 @@ def _to_breakdown(candidate: dict[str, Any]) -> RankingBreakdown:
         soft_signals_activated=int(soft_count) if isinstance(soft_count, int) else 0,
         memory_rankings_activated=int(memory_count) if isinstance(memory_count, int) else 0,
         memory_score=float(memory_score) if memory_score is not None else None,
+        memory_semantic=float(mem_sem) if mem_sem is not None else None,
+        memory_visual=float(mem_vis) if mem_vis is not None else None,
+        memory_feature=float(mem_feat) if mem_feat is not None else None,
+        memory_price=float(mem_price) if mem_price is not None else None,
     )
 
 

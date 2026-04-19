@@ -99,6 +99,79 @@ def _rank_by(
     return [lid for _, lid in scored]
 
 
+def _rank_by_value_map(
+    listing_ids: list[str],
+    value_map: dict[str, float | int | None],
+    *,
+    descending: bool,
+) -> list[str]:
+    """Rank ``listing_ids`` by ``value_map[listing_id]``. Missing / None values
+    are excluded from the ranking entirely (consistent with ``_rank_by``).
+    """
+    scored: list[tuple[float, str]] = []
+    for listing_id in listing_ids:
+        v = value_map.get(listing_id)
+        if v is None:
+            continue
+        scored.append((float(v), listing_id))
+    scored.sort(key=lambda pair: -pair[0] if descending else pair[0])
+    return [lid for _, lid in scored]
+
+
+def _load_commute_rows(
+    db_path: Path, listing_ids: list[str]
+) -> dict[tuple[str, str], int]:
+    """Return ``{(listing_id, landmark_key): travel_min}`` from
+    ``listing_commute_times`` — the r5py GTFS real-transit matrix.
+
+    Peak-hour Tuesday 8 AM snapshot, 45 curated landmarks, ~125k total rows
+    with ~24% per-landmark coverage. Missing tuples mean the r5py computation
+    did not produce a valid path (either the listing has no geo, the
+    landmark is > 40 km, or no feasible transit path exists at that time).
+    Callers fall back to the ``commute_proxy_*_min`` wide columns for the
+    8 HBs when this table has no row for a (listing, landmark) pair.
+    """
+    if not listing_ids:
+        return {}
+    out: dict[tuple[str, str], int] = {}
+    try:
+        conn = _connect(db_path)
+    except sqlite3.Error as exc:
+        print(
+            f"[WARN] soft_signals._load_commute_rows: expected=db connection, "
+            f"got={type(exc).__name__}: {exc}, fallback=empty commute map",
+            flush=True,
+        )
+        return {}
+    try:
+        CHUNK = 800
+        for i in range(0, len(listing_ids), CHUNK):
+            chunk = listing_ids[i : i + CHUNK]
+            placeholders = ", ".join("?" for _ in chunk)
+            sql = (
+                f"SELECT listing_id, landmark_key, travel_min "
+                f"FROM listing_commute_times WHERE listing_id IN ({placeholders})"
+            )
+            try:
+                for row in conn.execute(sql, chunk):
+                    travel = row["travel_min"]
+                    if travel is None:
+                        continue
+                    out[(row["listing_id"], row["landmark_key"])] = int(travel)
+            except sqlite3.OperationalError as exc:
+                print(
+                    f"[WARN] soft_signals._load_commute_rows: "
+                    f"expected=listing_commute_times table, "
+                    f"got={exc}, fallback=empty commute map (commute_target "
+                    f"falls back to commute_proxy_*_min wide columns)",
+                    flush=True,
+                )
+                return {}
+    finally:
+        conn.close()
+    return out
+
+
 def _sum_optional(*values: float | None) -> float | None:
     """Sum of non-None values, or None when all inputs are None."""
     collected = [v for v in values if v is not None]
@@ -165,6 +238,18 @@ def build_soft_rankings(
         # No data at all; nothing to rank by.
         return []
 
+    # Load the r5py GTFS commute matrix once per query if we need either
+    # commute_target or near_landmark - both can use real transit minutes as
+    # the primary signal, with the wide dist_landmark / commute_proxy columns
+    # as the fallback for listings that r5py couldn't reach.
+    needs_commute = bool(
+        soft.commute_target
+        or (soft.near_landmark and len(soft.near_landmark) > 0)
+    )
+    commute_rows: dict[tuple[str, str], int] = (
+        _load_commute_rows(db_path, listing_ids) if needs_commute else {}
+    )
+
     rankings: list[list[str]] = []
 
     # --- price_sentiment ---------------------------------------------------
@@ -198,11 +283,27 @@ def build_soft_rankings(
 
     if soft.commute_target:
         short = soft.commute_target.removesuffix("_hb")
-        col = f"commute_proxy_{short}_min"
-        rankings.append(_rank_by(
-            listing_ids, rows,
-            key=lambda r: _safe_row_get(r, col),
-            descending=False,  # lower commute is better
+        # Map SoftPreferences commute_target ("zurich_hb") to the long-table
+        # landmark_key ("hb_zurich").
+        landmark_key = f"hb_{short}"
+        proxy_col = f"commute_proxy_{short}_min"
+        # Primary: r5py real transit minutes. Fallback: wide proxy column
+        # (walk-to-stop + Haversine/60 km/h) for listings r5py didn't reach.
+        # Both coexist because r5py coverage is ~24%; proxy coverage is ~94%.
+        value_map: dict[str, float | int | None] = {}
+        for lid in listing_ids:
+            real = commute_rows.get((lid, landmark_key))
+            if real is not None:
+                value_map[lid] = real
+                continue
+            row = rows.get(lid)
+            if row is None:
+                continue
+            fallback = _safe_row_get(row, proxy_col)
+            if fallback is not None:
+                value_map[lid] = float(fallback)
+        rankings.append(_rank_by_value_map(
+            listing_ids, value_map, descending=False,  # lower commute is better
         ))
 
     # --- POI preferences ---------------------------------------------------
@@ -234,6 +335,10 @@ def build_soft_rankings(
         ))
 
     # --- landmarks ---------------------------------------------------------
+    # Primary: r5py real transit minutes from listing_commute_times.
+    # Fallback: Haversine distance in dist_landmark_<key>_m (wider coverage,
+    # crude proxy). We union the two so every listing with either signal
+    # participates, and transit time (when available) wins on accuracy.
     for name in soft.near_landmark or []:
         lm = landmarks.resolve(name)
         if lm is None:
@@ -246,10 +351,25 @@ def build_soft_rankings(
             )
             continue
         col = landmarks.column_for(lm.key)
-        rankings.append(_rank_by(
-            listing_ids, rows,
-            key=lambda r, col=col: _safe_row_get(r, col),
-            descending=False,
+        # Prefer transit minutes; divide Haversine metres by 1000 to keep
+        # it in the same magnitude ballpark (~ km) — the ranking still sorts
+        # correctly because we only rank listings that have at least one of
+        # the two signals, and the sort key is consistent within each listing.
+        value_map: dict[str, float | int | None] = {}
+        for lid in listing_ids:
+            real_min = commute_rows.get((lid, lm.key))
+            if real_min is not None:
+                value_map[lid] = float(real_min)
+                continue
+            row = rows.get(lid)
+            if row is None:
+                continue
+            dist_m = _safe_row_get(row, col)
+            if dist_m is not None:
+                # Convert metres to a minute-scale proxy (walking ~80 m/min).
+                value_map[lid] = float(dist_m) / 80.0
+        rankings.append(_rank_by_value_map(
+            listing_ids, value_map, descending=False,
         ))
 
     return rankings

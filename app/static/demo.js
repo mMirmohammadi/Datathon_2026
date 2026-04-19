@@ -37,6 +37,9 @@ const els = {
   detailModal: document.getElementById("listing-detail-modal"),
   detailBody: document.getElementById("listing-detail-body"),
   detailTitle: document.getElementById("listing-detail-title"),
+  similarModal: document.getElementById("similar-modal"),
+  similarBody: document.getElementById("similar-modal-body"),
+  similarTitle: document.getElementById("similar-modal-title"),
 };
 
 // ---------- auth + interaction client state ---------------------------------
@@ -547,15 +550,68 @@ function renderSoftFacts(md) {
     </div>`;
 }
 
+// Tier 3a: per-channel memory bars. Cosines are in [-1, 1]; we map them to
+// a symmetric bar where 0 is centered and ±1 fills in each direction. Missing
+// channels render with a muted "—" so the user can tell "no data" apart from
+// "data says 0".
+function renderMemoryChannels(bd) {
+  if (!bd) return "";
+  const fields = [
+    ["Semantic", "memory_semantic", "semantic",
+     "Cosine of query listing description embedding vs your positive-minus-negative description centroid (Arctic-Embed-L, 1024-d)."],
+    ["Visual", "memory_visual", "visual",
+     "Cosine of this listing's best photo embedding vs your positive-listing photo centroid (SigLIP-2 Giant, 1536-d)."],
+    ["Feature", "memory_feature", "feature",
+     "Dot product of this listing's feature presence vs your learned per-feature preference vector."],
+    ["Price", "memory_price", "price",
+     "Inverse distance of log(price) to your personal log-price mean / sigma fitted over positive listings."],
+    ["Composite", "memory_score", "composite",
+     "Mean of the available channels above — the single number the ranker uses."],
+  ];
+  const anyPresent = fields.some(([_, key]) => bd[key] != null);
+  if (!anyPresent) {
+    return `<p class="memory-header-note empty">
+      No memory signals for this listing yet. Like or save a few listings, then re-run the search with Personalize on.
+    </p>`;
+  }
+  const row = (label, key, cls, tooltip) => {
+    const v = bd[key];
+    if (v == null) {
+      return `<div class="memory-bar-row">
+        <div class="label" title="${esc(tooltip)}">${esc(label)}</div>
+        <div class="memory-bar"></div>
+        <div class="val muted">—</div>
+      </div>`;
+    }
+    // Map [-1, 1] → [0, 100] fill, clamped.
+    const pct = Math.max(0, Math.min(100, (v + 1) * 50));
+    return `<div class="memory-bar-row">
+      <div class="label" title="${esc(tooltip)}">${esc(label)}</div>
+      <div class="memory-bar"><div class="fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
+      <div class="val">${v.toFixed(3)}</div>
+    </div>`;
+  };
+  return `
+    <p class="memory-header-note">
+      Each channel is a cosine vs. a vector built from your interaction history.
+      Higher is closer to your taste. Bar centre = 0.
+    </p>
+    <div class="memory-channels">
+      ${fields.map(([label, key, cls, tip]) => row(label, key, cls, tip)).join("")}
+    </div>`;
+}
+
 function renderDetail(res) {
   const listing = res.listing || {};
   const md = res.match_detail;
+  const bd = res.breakdown;
   const images = [listing.hero_image_url, ...(listing.image_urls || [])]
     .filter(Boolean)
     .filter((v, i, a) => a.indexOf(v) === i);
 
   const matchedCount = (md?.matched_keywords || []).length;
   const missedCount = (md?.unmatched_keywords || []).length;
+  const memoryActive = bd && (bd.memory_rankings_activated || 0) > 0;
 
   return `
     <div class="listing-detail">
@@ -569,6 +625,21 @@ function renderDetail(res) {
           matchedCount + missedCount
         }</span></h4>
         ${renderKeywordHits(md)}
+
+        ${
+          memoryActive
+            ? `<h4 style="margin-top:14px">Memory channels <span class="count">${
+                bd.memory_rankings_activated
+              }</span></h4>
+               ${renderMemoryChannels(bd)}`
+            : ""
+        }
+
+        <button type="button" class="find-similar-btn" data-similar-id="${esc(
+          res.listing_id,
+        )}" data-similar-title="${esc(listing.title || res.listing_id)}">
+          🔍 Find visually similar listings
+        </button>
       </div>
       <div class="detail-block">
         <h4>Soft-preference signals for this listing <span class="count">${
@@ -599,7 +670,38 @@ function renderListings(listings, meta) {
       "No listings matched the hard filters for this query.";
     return;
   }
+
+  // Tier 5a: dismissed-listings toast. Fires only when personalization
+  // actually removed something (anonymous callers never see this).
+  const hiddenDismissed = Number(meta.hidden_dismissed || 0);
+  const dismissedToast = hiddenDismissed > 0
+    ? `<div class="dismissed-toast">
+         <span><span class="ico">✨</span> ${hiddenDismissed} listing${
+           hiddenDismissed === 1 ? "" : "s"
+         } hidden because you (or look-alike photos of ones you) dismissed.</span>
+         <span class="muted small">Toggle Personalize off to see them.</span>
+       </div>`
+    : "";
+
+  // Tier 5b: cold-start coaching. Authenticated user, personalize on, but
+  // zero memory rankings fired — means they haven't liked / saved enough
+  // listings yet to build a profile.
+  const pipeline = meta.pipeline || {};
+  const authed = !!(authState && authState.user);
+  const wantsPersonalize = !!(els.personalizeToggle && els.personalizeToggle.checked);
+  const memoryInactive = authed && wantsPersonalize && !pipeline.memory;
+  const coldStart = memoryInactive
+    ? `<div class="coldstart-hint">
+         <b>Personalize is on but your history is empty.</b>
+         Like or save <b>at least 3 listings</b> and re-run the search —
+         the semantic / visual / feature / price channels will light up on
+         the expanded detail panel.
+       </div>`
+    : "";
+
   els.resultStatus.innerHTML = `
+    ${dismissedToast}
+    ${coldStart}
     <b>${listings.length}</b> listings (of ${
     meta.candidate_pool_size ?? "?"
   } after hard-filter gate).
@@ -812,6 +914,17 @@ function renderListings(listings, meta) {
           "click again to collapse ↑";
         // Implicit positive: card was deliberately expanded.
         postInteraction(listingId, "click");
+        // Tier 4: wire the "Find similar" button now that it exists in the DOM.
+        const similarBtn = card.querySelector(".find-similar-btn");
+        if (similarBtn) {
+          similarBtn.addEventListener("click", (ev) => {
+            ev.stopPropagation();  // don't collapse the card
+            openSimilarModal(
+              similarBtn.dataset.similarId,
+              similarBtn.dataset.similarTitle,
+            );
+          });
+        }
       }
     };
 
@@ -1429,6 +1542,87 @@ function closeDetail() {
   }
 }
 
+// ---------- Tier 4: DINOv2 "find similar" modal ----------------------------
+// Image-to-image reverse search. Fetches /listings/{id}/similar and renders
+// the results as a tiled grid. Each card is clickable to open the listing
+// detail modal (stack-style: closing Similar returns to the source result).
+
+async function openSimilarModal(listingId, sourceTitle) {
+  if (!els.similarModal) return;
+  els.similarTitle.textContent = sourceTitle
+    ? `Similar to "${sourceTitle}"`
+    : "Visually similar";
+  els.similarBody.innerHTML = '<p class="muted">Loading DINOv2 similarity…</p>';
+  if (typeof els.similarModal.showModal === "function") {
+    els.similarModal.showModal();
+  } else {
+    els.similarModal.setAttribute("open", "");
+  }
+
+  let data;
+  try {
+    const r = await fetch(
+      `/listings/${encodeURIComponent(listingId)}/similar?k=12`,
+      { credentials: "same-origin" },
+    );
+    if (r.status === 503) {
+      els.similarBody.innerHTML = `<p class="empty">DINOv2 reverse-image search is disabled on this server. Start uvicorn with <code>LISTINGS_DINOV2_ENABLED=1</code> to enable.</p>`;
+      return;
+    }
+    if (!r.ok) {
+      els.similarBody.innerHTML = `<p class="empty">Failed (HTTP ${r.status}).</p>`;
+      return;
+    }
+    data = await r.json();
+  } catch (e) {
+    els.similarBody.innerHTML = `<p class="empty">Network error: ${esc(e.message)}</p>`;
+    return;
+  }
+
+  const results = data.results || [];
+  if (!results.length) {
+    const note = (data.meta && data.meta.note) || "No similar listings in the index.";
+    els.similarBody.innerHTML = `<p class="empty">${esc(note)}</p>`;
+    return;
+  }
+
+  const meta = data.meta || {};
+  const metaLine = `<p class="muted small" style="margin:0 0 10px 0">
+    Model: ${esc(meta.model || "?")} · returned ${esc(meta.k_returned ?? results.length)} of top ${esc(meta.k_requested ?? "?")} · ${esc(meta.aggregation || "max cosine")}
+  </p>`;
+
+  const cards = results.map((r) => {
+    const L = r.listing || {};
+    const img = L.hero_image_url || (L.image_urls || [])[0] || "";
+    return `<div class="similar-card" data-listing-id="${esc(r.listing_id)}">
+      ${img ? `<img src="${esc(img)}" alt="${esc(L.title || "")}" loading="lazy" />` : ""}
+      <div class="body">
+        <div class="title">${esc(L.title || r.listing_id)}</div>
+        <div class="meta">${esc(chf(L.price_chf))} · ${esc(L.rooms ?? "?")} rm · ${esc(L.city || "")}</div>
+        <div class="cosine">cosine ${r.cosine.toFixed(3)}</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  els.similarBody.innerHTML = metaLine + `<div class="similar-list">${cards}</div>`;
+
+  els.similarBody.querySelectorAll(".similar-card").forEach((node) => {
+    node.addEventListener("click", () => {
+      const otherId = node.dataset.listingId;
+      if (otherId) openListingDetail(otherId);
+    });
+  });
+}
+
+function closeSimilarModal() {
+  if (!els.similarModal) return;
+  if (typeof els.similarModal.close === "function") {
+    els.similarModal.close();
+  } else {
+    els.similarModal.removeAttribute("open");
+  }
+}
+
 function renderListingDetail(L) {
   els.detailTitle.textContent = L.title || "(untitled listing)";
   const images = [L.hero_image_url, ...(L.image_urls || [])]
@@ -1670,6 +1864,9 @@ document.querySelectorAll("[data-fav-close]").forEach((btn) => {
 });
 document.querySelectorAll("[data-detail-close]").forEach((btn) => {
   btn.addEventListener("click", closeDetail);
+});
+document.querySelectorAll("[data-similar-close]").forEach((btn) => {
+  btn.addEventListener("click", closeSimilarModal);
 });
 
 if (els.authTabs) {

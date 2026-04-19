@@ -1559,3 +1559,167 @@ kbd {
   background: #f1f4f9;
   border-radius: 4px;
 }
+
+/* ---------- Memory channel bars (Tier 3a) ------------------------------- */
+
+.memory-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.memory-bar-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 58px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.memory-bar-row .label {
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.memory-bar {
+  height: 8px;
+  background: var(--panel-2);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.memory-bar .fill {
+  height: 100%;
+  border-radius: 4px;
+}
+
+.memory-bar .fill.semantic { background: var(--semantic); }
+.memory-bar .fill.visual { background: var(--visual); }
+.memory-bar .fill.feature { background: var(--accent-2); }
+.memory-bar .fill.price { background: var(--bm25); }
+.memory-bar .fill.composite {
+  background: linear-gradient(90deg, var(--rrf), var(--accent-2));
+}
+
+.memory-bar-row .val {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--ink);
+  text-align: right;
+}
+
+.memory-bar-row .val.muted { color: #556; }
+
+.memory-header-note {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 4px 0 6px 0;
+  line-height: 1.45;
+}
+
+/* ---------- Find Similar button + modal (Tier 4) ------------------------ */
+
+.find-similar-btn {
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: linear-gradient(135deg, var(--rrf) 0%, var(--accent) 100%);
+  color: #0a1233;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: opacity 0.15s;
+}
+
+.find-similar-btn:hover { opacity: 0.88; }
+.find-similar-btn:disabled { opacity: 0.45; cursor: wait; }
+
+.similar-modal .modal-inner {
+  max-width: 780px;
+  width: 90vw;
+}
+
+.similar-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.similar-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.similar-card:hover { border-color: var(--accent); }
+
+.similar-card img {
+  width: 100%;
+  aspect-ratio: 4/3;
+  object-fit: cover;
+  background: var(--panel);
+}
+
+.similar-card .body {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.similar-card .body .title {
+  color: var(--ink);
+  font-weight: 500;
+  margin-bottom: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.similar-card .body .meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.similar-card .cosine {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--rrf);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* ---------- Dismissed-listings toast + cold-start hint (Tier 5) --------- */
+
+.dismissed-toast {
+  background: rgba(191, 166, 255, 0.08);
+  border: 1px solid rgba(191, 166, 255, 0.3);
+  color: var(--rrf);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 6px 0 10px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.dismissed-toast .ico { font-size: 14px; }
+
+.coldstart-hint {
+  background: rgba(255, 209, 102, 0.07);
+  border: 1px solid rgba(255, 209, 102, 0.3);
+  color: var(--semantic);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 6px 0 10px 0;
+  line-height: 1.5;
+}
+
+.coldstart-hint b { color: var(--ink); }

@@ -241,6 +241,16 @@ def _price_fact(row: sqlite3.Row | None, sentiment: str) -> MatchFact:
     plz_delta = _safe(row, "price_delta_pct_plz_rooms")
     delta = canton_delta if canton_delta is not None else plz_delta
     basis = "canton×rooms" if canton_delta is not None else "PLZ×rooms"
+    # Tier 3b: pull the actual baseline CHF + sample size so the MatchFact
+    # can say "… (baseline 2,380 CHF, n=47)" instead of just a relative %.
+    baseline_chf: float | None = None
+    baseline_n: int | None = None
+    if canton_delta is not None:
+        baseline_chf = _safe(row, "price_baseline_chf_canton_rooms")
+        baseline_n = _safe(row, "price_baseline_n_canton_rooms")
+    else:
+        baseline_chf = _safe(row, "price_baseline_chf_plz_rooms")
+        baseline_n = _safe(row, "price_baseline_n_plz_rooms")
     plausibility = _safe(row, "price_plausibility")
 
     if delta is None:
@@ -253,6 +263,14 @@ def _price_fact(row: sqlite3.Row | None, sentiment: str) -> MatchFact:
 
     sign = "below" if delta < 0 else "above"
     value = f"{abs(delta):.0f}% {sign} {basis} baseline"
+    # Enrich with the concrete numbers when we have them.
+    baseline_parts: list[str] = []
+    if baseline_chf is not None:
+        baseline_parts.append(f"≈ {int(round(baseline_chf)):,} CHF".replace(",", "'"))
+    if baseline_n is not None:
+        baseline_parts.append(f"n={int(baseline_n)}")
+    if baseline_parts:
+        value += " (" + ", ".join(baseline_parts) + ")"
     if plausibility == "suspect":
         value += " · flagged as suspect"
 
@@ -310,12 +328,36 @@ def _quiet_fact(row: sqlite3.Row | None) -> MatchFact:
     )
 
 
+_STOP_TYPE_ICON = {
+    # GTFS route_type / simplified OSM stop category → a short label prefix.
+    "train": "🚆",
+    "rail": "🚆",
+    "sbahn": "🚆",
+    "s-bahn": "🚆",
+    "tram": "🚋",
+    "bus": "🚌",
+    "funicular": "🚠",
+    "ferry": "⛴",
+    "metro": "🚇",
+    "subway": "🚇",
+}
+
+
+def _stop_icon(stop_type: str | None) -> str:
+    """Render a one-char icon for the stop type, or empty on miss."""
+    if not stop_type:
+        return ""
+    key = str(stop_type).strip().lower()
+    return _STOP_TYPE_ICON.get(key, "")
+
+
 def _transit_fact(row: sqlite3.Row | None) -> MatchFact:
     dist = _safe(row, "dist_nearest_stop_m")
     lines = _safe(row, "nearest_stop_lines_count_clamped")
     if lines is None:
         lines = _safe(row, "nearest_stop_lines_count")
     name = _safe(row, "nearest_stop_name")
+    stop_type = _safe(row, "nearest_stop_type")
     if dist is None:
         return MatchFact(
             axis="near_public_transport",
@@ -323,7 +365,16 @@ def _transit_fact(row: sqlite3.Row | None) -> MatchFact:
             value="— (no GTFS match)",
             interpretation=_INTERP_UNKNOWN,
         )
-    pieces = [f"{name} ({_fmt_m(dist)})" if name else _fmt_m(dist)]
+    icon = _stop_icon(stop_type)
+    # Tier 3c: prefix the stop with its modal icon so users can tell tram /
+    # train / bus apart at a glance. Falls back to no icon if stop_type is
+    # missing or not in the lookup.
+    name_part = f"{icon} {name}".strip() if icon and name else (name or "")
+    pieces = [
+        f"{name_part} ({_fmt_m(dist)})" if name_part else _fmt_m(dist)
+    ]
+    if stop_type:
+        pieces.append(f"type: {stop_type}")
     if lines is not None:
         pieces.append(f"{int(lines)} line{'s' if int(lines) != 1 else ''}")
     # < 300 m + ≥ 2 lines → good; < 600 m → ok; otherwise poor.
@@ -341,17 +392,43 @@ def _transit_fact(row: sqlite3.Row | None) -> MatchFact:
     )
 
 
-def _commute_fact(row: sqlite3.Row | None, target: str) -> MatchFact:
+def _commute_fact(
+    row: sqlite3.Row | None,
+    target: str,
+    *,
+    commute_rows: dict[tuple[str, str], int] | None = None,
+    listing_id: str | None = None,
+) -> MatchFact:
+    """Commute-minutes fact for the requested HB target.
+
+    Primary source is the r5py / GTFS ``listing_commute_times`` table (real
+    door-to-door transit minutes, peak Tuesday 8 AM). Fallback is the wide
+    ``commute_proxy_<city>_min`` column (a crude walk-to-stop + Haversine/60 km/h
+    approximation) when r5py had no path for this listing. We say which
+    source we used in the label so users can tell a real 14-min measurement
+    apart from a proxy 2-min estimate.
+    """
     short = target.removesuffix("_hb")
-    col = f"commute_proxy_{short}_min"
-    val = _safe(row, col)
-    if val is None:
-        return MatchFact(
-            axis=f"commute_{short}",
-            label=f"Commute proxy to {target}",
-            value="— (no commute value for this listing)",
-            interpretation=_INTERP_UNKNOWN,
-        )
+    landmark_key = f"hb_{short}"
+    real_min: int | None = None
+    if commute_rows and listing_id is not None:
+        real_min = commute_rows.get((listing_id, landmark_key))
+
+    if real_min is not None:
+        val: float = float(real_min)
+        source = "r5py transit"
+    else:
+        proxy = _safe(row, f"commute_proxy_{short}_min")
+        if proxy is None:
+            return MatchFact(
+                axis=f"commute_{short}",
+                label=f"Commute to {target}",
+                value="— (no commute value for this listing)",
+                interpretation=_INTERP_UNKNOWN,
+            )
+        val = float(proxy)
+        source = "proxy (walk + Haversine/60 km/h)"
+
     if val <= 20:
         interp = _INTERP_GOOD
     elif val <= 45:
@@ -360,8 +437,8 @@ def _commute_fact(row: sqlite3.Row | None, target: str) -> MatchFact:
         interp = _INTERP_POOR
     return MatchFact(
         axis=f"commute_{short}",
-        label=f"Commute proxy to {target}",
-        value=f"{int(round(val))} min",
+        label=f"Commute to {target}",
+        value=f"{int(round(val))} min · {source}",
         interpretation=interp,
     )
 
@@ -416,7 +493,13 @@ def _family_fact(row: sqlite3.Row | None) -> MatchFact:
     )
 
 
-def _landmark_fact(row: sqlite3.Row | None, name: str) -> MatchFact | None:
+def _landmark_fact(
+    row: sqlite3.Row | None,
+    name: str,
+    *,
+    commute_rows: dict[tuple[str, str], int] | None = None,
+    listing_id: str | None = None,
+) -> MatchFact | None:
     lm = landmarks.resolve(name)
     if lm is None:
         # Unknown landmark — consistent with the silent-disable WARN
@@ -428,30 +511,61 @@ def _landmark_fact(row: sqlite3.Row | None, name: str) -> MatchFact | None:
             interpretation=_INTERP_UNKNOWN,
         )
     col = landmarks.column_for(lm.key)
-    val = _safe(row, col)
-    if val is None:
+    dist_m = _safe(row, col)
+    # Pull the r5py transit-time row too, if available. This is the Tier 2c
+    # upgrade: a landmark fact that pairs straight-line distance with real
+    # door-to-door transit minutes, so the user sees BOTH axes rather than
+    # having to guess whether "1.9 km" is walkable or 40 min by bus.
+    transit_min: int | None = None
+    if commute_rows and listing_id is not None:
+        transit_min = commute_rows.get((listing_id, lm.key))
+
+    if dist_m is None and transit_min is None:
         return MatchFact(
             axis=f"landmark_{lm.key}",
             label=f"Distance to {name}",
             value="—",
             interpretation=_INTERP_UNKNOWN,
         )
-    if val <= 1500:
-        interp = _INTERP_GOOD
-    elif val <= 5000:
-        interp = _INTERP_OK
+
+    # Interpretation is driven by the strongest signal we have. Transit
+    # minutes win when present; Haversine is the fallback.
+    if transit_min is not None:
+        if transit_min <= 15:
+            interp = _INTERP_GOOD
+        elif transit_min <= 30:
+            interp = _INTERP_OK
+        else:
+            interp = _INTERP_POOR
     else:
-        interp = _INTERP_POOR
+        if dist_m <= 1500:
+            interp = _INTERP_GOOD
+        elif dist_m <= 5000:
+            interp = _INTERP_OK
+        else:
+            interp = _INTERP_POOR
+
+    parts: list[str] = []
+    if dist_m is not None:
+        parts.append(_fmt_m(dist_m))
+    if transit_min is not None:
+        parts.append(f"{int(transit_min)} min by transit")
+    value = " · ".join(parts) if parts else "—"
+
     return MatchFact(
         axis=f"landmark_{lm.key}",
         label=f"Distance to {name}",
-        value=_fmt_m(val),
+        value=value,
         interpretation=interp,
     )
 
 
 def _build_soft_facts(
-    row: sqlite3.Row | None, soft: SoftPreferences | None
+    row: sqlite3.Row | None,
+    soft: SoftPreferences | None,
+    *,
+    commute_rows: dict[tuple[str, str], int] | None = None,
+    listing_id: str | None = None,
 ) -> list[MatchFact]:
     if soft is None:
         return []
@@ -464,7 +578,10 @@ def _build_soft_facts(
     if soft.near_public_transport:
         facts.append(_transit_fact(row))
     if soft.commute_target:
-        facts.append(_commute_fact(row, soft.commute_target))
+        facts.append(_commute_fact(
+            row, soft.commute_target,
+            commute_rows=commute_rows, listing_id=listing_id,
+        ))
     if soft.near_schools:
         facts.append(_poi_fact(
             row, "near_schools", "Schools within 1 km",
@@ -483,7 +600,10 @@ def _build_soft_facts(
     if soft.family_friendly:
         facts.append(_family_fact(row))
     for name in soft.near_landmark or []:
-        fact = _landmark_fact(row, name)
+        fact = _landmark_fact(
+            row, name,
+            commute_rows=commute_rows, listing_id=listing_id,
+        )
         if fact is not None:
             facts.append(fact)
     return facts
@@ -497,13 +617,20 @@ def build_match_detail(
     listing: dict[str, Any],
     hard: HardFilters,
     signal_row: sqlite3.Row | None,
+    commute_rows: dict[tuple[str, str], int] | None = None,
 ) -> MatchDetail:
     matched, unmatched = _keyword_hits(listing, hard.bm25_keywords)
+    listing_id = str(listing["listing_id"]) if "listing_id" in listing else None
     return MatchDetail(
         hard_checks=_build_hard_checks(listing, hard),
         matched_keywords=matched,
         unmatched_keywords=unmatched,
-        soft_facts=_build_soft_facts(signal_row, hard.soft_preferences),
+        soft_facts=_build_soft_facts(
+            signal_row,
+            hard.soft_preferences,
+            commute_rows=commute_rows,
+            listing_id=listing_id,
+        ),
     )
 
 

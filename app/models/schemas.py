@@ -107,6 +107,11 @@ class RankingBreakdown(BaseModel):
     channel was disabled, or the listing had no data on that axis). The fused
     ``rrf_score`` is the number the ranker sorts by; the per-channel fields
     are the raw inputs so the UI can explain WHY a listing ranked where it did.
+
+    The memory_* fields are the 4 personalization channels from
+    :class:`app.memory.rankings.MemorySignals`. Exposing them lets the UI
+    show which axis of the user's history this listing looks like (semantic
+    description taste, visual photo taste, feature checklist, price habit).
     """
 
     rrf_score: float | None = None
@@ -116,6 +121,10 @@ class RankingBreakdown(BaseModel):
     soft_signals_activated: int = 0
     memory_rankings_activated: int = 0
     memory_score: float | None = None
+    memory_semantic: float | None = None
+    memory_visual: float | None = None
+    memory_feature: float | None = None
+    memory_price: float | None = None
 
 
 class HardCheck(BaseModel):
@@ -175,6 +184,24 @@ class RankedListingResult(BaseModel):
 
 class ListingsResponse(BaseModel):
     listings: list[RankedListingResult]
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class SimilarListing(BaseModel):
+    """One row of the DINOv2 "find similar" response.
+
+    ``cosine`` is the max cosine of the query listing's centroid against any
+    image of this listing — in [-1, 1], higher is more similar.
+    """
+
+    listing_id: str
+    cosine: float
+    listing: ListingData
+
+
+class SimilarListingsResponse(BaseModel):
+    query_listing_id: str
+    results: list[SimilarListing]
     meta: dict[str, Any] = Field(default_factory=dict)
 
 

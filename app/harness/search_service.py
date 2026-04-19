@@ -5,7 +5,11 @@ from typing import Any
 
 from app.core.hard_filters import HardFilterParams, search_listings
 from app.core.match_explain import build_match_detail
-from app.core.soft_signals import _load_signal_rows, build_soft_rankings
+from app.core.soft_signals import (
+    _load_commute_rows,
+    _load_signal_rows,
+    build_soft_rankings,
+)
 from app.core.text_embed_search import (
     _STATE as _TEXT_EMBED_STATE,
     is_loaded as text_embed_is_loaded,
@@ -45,7 +49,7 @@ def _rerank_hybrid(
     user_id: int | None = None,
     personalize: bool = False,
     users_db_path: Path | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int]:
     """Collect BM25 + visual + text_embed + soft + (opt) memory rankings and
     fuse them via RRF.
 
@@ -63,7 +67,7 @@ def _rerank_hybrid(
     history. Memory is purely additive - nothing existing is replaced.
     """
     if not candidates:
-        return candidates
+        return candidates, 0
 
     listing_ids = [str(c["listing_id"]) for c in candidates]
     rankings: list[list[str]] = [listing_ids]  # BM25 channel (input order)
@@ -117,8 +121,19 @@ def _rerank_hybrid(
         candidate["memory_rankings_activated"] = memory_rankings_count
         if memory_signals is not None:
             candidate["memory_score"] = memory_signals.composite(listing_id)
+            # Tier 3a: per-channel scores so the UI can show WHY a listing is
+            # personalized (semantic description taste vs visual photo taste
+            # vs feature checklist vs price habit).
+            candidate["memory_semantic"] = memory_signals.semantic.get(listing_id)
+            candidate["memory_visual"] = memory_signals.visual.get(listing_id)
+            candidate["memory_feature"] = memory_signals.feature.get(listing_id)
+            candidate["memory_price"] = memory_signals.price.get(listing_id)
         else:
             candidate["memory_score"] = None
+            candidate["memory_semantic"] = None
+            candidate["memory_visual"] = None
+            candidate["memory_feature"] = None
+            candidate["memory_price"] = None
 
     candidates.sort(key=lambda c: -c["rrf_score"])
 
@@ -129,20 +144,22 @@ def _rerank_hybrid(
     # this filter ensures it can't. Dismissed listings remain reachable via
     # the anonymous path or with ``personalize=False`` so the Undo button
     # on the dimmed card still works.
+    dismissed_dropped = 0
     if profile is not None and profile.dismissed_ids:
         before = len(candidates)
         candidates = [
             c for c in candidates
             if str(c["listing_id"]) not in profile.dismissed_ids
         ]
-        dropped = before - len(candidates)
-        if dropped > 0:
+        dismissed_dropped = before - len(candidates)
+        if dismissed_dropped > 0:
             print(
-                f"[INFO] _rerank_hybrid: dropped {dropped} dismissed listing(s) "
-                f"from personalized results for user_id={user_id}",
+                f"[INFO] _rerank_hybrid: dropped {dismissed_dropped} "
+                f"dismissed listing(s) from personalized results for "
+                f"user_id={user_id}",
                 flush=True,
             )
-    return candidates
+    return candidates, dismissed_dropped
 
 
 def _pipeline_snapshot(
@@ -190,7 +207,7 @@ def query_from_text(
     soft_facts = extract_soft_facts(query)
     candidates = filter_hard_facts(db_path, hard_facts)
     pool_size = len(candidates)
-    candidates = _rerank_hybrid(
+    candidates, dismissed_dropped = _rerank_hybrid(
         candidates,
         query,
         hard_facts.soft_preferences,
@@ -211,6 +228,10 @@ def query_from_text(
             "pipeline": pipeline,
             "candidate_pool_size": pool_size,
             "returned": min(limit, len(candidates)),
+            # Tier 5a: number of listings suppressed because the authenticated
+            # user dismissed them (or a very similar one) earlier. Drives
+            # the "N listings hidden" toast in the demo UI.
+            "hidden_dismissed": dismissed_dropped,
         },
     )
 
@@ -239,12 +260,31 @@ def _attach_match_details(
             flush=True,
         )
         rows = {}
+    # Tier 2: load r5py real-commute rows once per request for the top-K so
+    # both commute_target and near_landmark MatchFacts can surface real
+    # transit minutes rather than Haversine-derived proxies.
+    soft = hard.soft_preferences
+    needs_commute = bool(
+        soft and (soft.commute_target or soft.near_landmark)
+    )
+    try:
+        commute_rows = (
+            _load_commute_rows(db_path, listing_ids) if needs_commute else {}
+        )
+    except Exception as exc:
+        print(
+            f"[WARN] _attach_match_details: expected=listing_commute_times rows, "
+            f"got={type(exc).__name__}: {exc}, fallback=commute_proxy wide columns",
+            flush=True,
+        )
+        commute_rows = {}
     for candidate in candidates:
         lid = str(candidate["listing_id"])
         candidate["_match_detail"] = build_match_detail(
             listing=candidate,
             hard=hard,
             signal_row=rows.get(lid),
+            commute_rows=commute_rows,
         )
 
 
