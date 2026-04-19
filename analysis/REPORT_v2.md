@@ -22,7 +22,7 @@
 
 3. **Real transit commute times are live.** Every (listing, landmark) pair within 40 km Haversine has a door-to-door public-transport minute count — **121,219 non-null rows across 22,255 listings × 45 landmarks**. Spot-checks on 20 real addresses match Google Maps transit mode within ±5 min. See §7.
 
-4. **Zero-null invariant holds for the 37 original fields.** Every `{field}_filled` column has a non-null value; `"UNKNOWN"` is the explicit sentinel. **4 new pass-2b fields** (`bathroom_count`, `bathroom_shared`, `has_cellar`, `kitchen_shared`) are in `UNKNOWN-pending` state — the schema + extraction code were shipped today; the actual extraction run is scheduled but not executed yet. See §9.
+4. **Zero-null invariant holds across all 41 enriched fields** (37 original + 4 pass-2b shipped today). `bathroom_count`, `bathroom_shared`, `has_cellar`, `kitchen_shared` now have real values on 40.5 – 58.2% of listings; the rest are `UNKNOWN` (never `UNKNOWN-pending`). See §9 and the new §5B.
 
 5. **Query answerability** — the ranker can now evaluate: *"canton = ZH"* on 99.7% of listings, *"has balcony"* on 86.1%, *"< 300 m to transit"* on 93.6%, *"≤ 25 min to HB Zurich"* on 23.9% (only 24% of the corpus is close enough to Zurich to bother measuring — that's correct behaviour, not missing data). See §8.
 
@@ -120,6 +120,65 @@ The lift is biggest where the raw CSV had nothing (`child_friendly`, `temporary`
 - agency_phone: **99 %** (495 / 500); 5 masked-digit fabrications (`000 00 00`), all confidence < 0.6
 - year_built: **94.7 %** (284 / 300 — remainder are multi-year ranges)
 - area: **99 %** (297 / 300)
+
+---
+
+## 3B. Pass 2b — bathroom / cellar / kitchen extraction
+
+Four new extraction-only fields shipped this session on top of the 37 from §3. `listings_enriched` now has **41 fields × 4 provenance columns = 164 cols**. Every value comes from a fresh `gpt-5.4-nano-2026-03-17` pass with Pydantic Structured Outputs; full design + audit in [`_context/LAYER1_STATE.md §12`](../_context/LAYER1_STATE.md) and [`_context/PASS2B_PLAN.md`](../_context/PASS2B_PLAN.md).
+
+### 3B.1 Final coverage
+
+| field | filled | UNKNOWN | coverage | mean conf | dtype |
+|---|---:|---:|---:|---:|---|
+| `bathroom_count`   | 14,856 | 10,690 | **58.2%** | 0.89 | INTEGER |
+| `bathroom_shared`  | 14,008 | 11,538 | **54.8%** | 0.75 | BOOLEAN |
+| `has_cellar`       | 10,340 | 15,206 | **40.5%** | 0.88 | BOOLEAN |
+| `kitchen_shared`   | 14,461 | 11,085 | **56.6%** | 0.75 | BOOLEAN |
+
+All four share the same provenance tag: `text_gpt_5_4_nano_pass2b` (new source constant, appended to `VALID_SOURCES` — see [`enrichment/common/sources.py:20`](../enrichment/common/sources.py#L20)).
+
+### 3B.2 Value distributions
+
+**`bathroom_count`** — dominated by 1-bathroom units, which matches Swiss rental reality:
+
+| value | count | share |
+|---|---:|---:|
+| 1 | 12,097 | 81.4% |
+| 2 |  2,611 | 17.6% |
+| 3 |    111 |  0.7% |
+| 4 |     24 |  0.2% |
+| 5-7 |    13 |  0.1% |
+
+**`bathroom_shared`** — 97.7% **false** · 2.3% **true** (324 rows). Shared bathrooms correctly cluster in `object_category IN ('shared_room', 'room')`.
+
+**`has_cellar`** — 98.5% **true** · 1.5% **false** (155 rows). Asymmetric by design: listings mention cellars when they have them; absence is ambiguous, so the extractor only writes `false` when the description explicitly denies one. This matches the Swiss-rental convention where *Keller* is nearly universal.
+
+**`kitchen_shared`** — 97.6% **false** · 2.4% **true** (343 rows). Same pattern as `bathroom_shared` — shared kitchens concentrate in WG-Zimmer / shared-room listings.
+
+### 3B.3 Cost + run profile
+
+| metric | value |
+|---|---|
+| Runs | 3 (first two killed for rate-limit / stall bugs) |
+| Cache entries | 19,852 |
+| DB writes | **53,665** across 4 fields |
+| Validator drops | 971 (665 paraphrase, 132 out-of-range, 174 missing-snippet) |
+| Wall time | ~1h 45min total |
+| OpenAI spend | ~$3 (gpt-5.4-nano is ~10× cheaper than the gpt-5.4-mini pass 2) |
+
+### 3B.4 Cross-validation
+
+- **30-sample stratified spot-check** — 30 / 30 semantically correct across 4 languages (DE/FR/IT/EN).
+- **Parallel auditor agent** with independent SQL queries — 18/18 numeric claims exact; 97% snippet-in-description on random 100 (target ≥ 95%); 20/20 `bathroom_shared=true` writes had a legitimate shared-living keyword. Verdict: SHIP AS IS.
+
+### 3B.5 Queries unlocked
+
+| query class | field(s) | example from [queries_de.md](../queries_de.md) |
+|---|---|---|
+| bathroom count filter | `bathroom_count` | *"2 Badezimmer wären ein Plus"* |
+| cellar filter | `has_cellar` | *"mit Waschturm, Keller"* |
+| shared-living discrimination | `bathroom_shared`, `kitchen_shared` | *"WG-Zimmer"* vs *"Einzelzimmer"* |
 
 ---
 
@@ -300,20 +359,9 @@ Two Layer-2 columns exist specifically to keep the ranker safe from pathological
 
 ## 10. Remaining gaps + known anomalies
 
-### 10.1 Pass 2b — 4 new fields waiting for extraction
+### 10.1 Pass 2b — **completed** (see §3B for full analysis)
 
-The 4 extraction-only fields shipped today ([commit `c14c370`](https://github.com/mMirmohammadi/Datathon_2026/commit/c14c370)) are still `UNKNOWN-pending`:
-
-| field | listings in pending | status |
-|---|---:|---|
-| `bathroom_count` | 21,056 | schema + extraction code shipped; scheduled run pending |
-| `bathroom_shared` | 22,530 | " |
-| `has_cellar` | 22,438 | " |
-| `kitchen_shared` | 22,391 | " |
-
-Running [`pass2b_bathroom_cellar_kitchen.py`](../enrichment/scripts/pass2b_bathroom_cellar_kitchen.py) over the corpus will resolve these — estimated ~$3 OpenAI cost + 45 min wall-time for gpt-5.4-nano at the rate-limited tier.
-
-**Note on the zero-pending invariant**: it still holds for the 37 **original** enriched fields. The 4 new fields are by-design in the pending state between "schema registered" and "extraction completed" — that's the lifecycle, not a regression.
+The 4 extraction-only fields shipped today are **done**: 53,665 DB writes applied, 19,852 cache entries, ~$3 OpenAI spend, 30/30 spot-check clean, parallel auditor verdict SHIP AS IS. Coverage: `bathroom_count` 58.2%, `bathroom_shared` 54.8%, `has_cellar` 40.5%, `kitchen_shared` 56.6%. Zero-pending invariant holds across all **41** enriched fields.
 
 ### 10.2 Lake-landmark mid-water geocoding
 

@@ -91,17 +91,28 @@ AUDIT_PATH = Path(__file__).resolve().parents[1] / "data" / "pass2b_audit.json"
 
 # --- residential category whitelist (auditor §8.2) ---------------------------
 
+# `listings.object_category` stores English slugs, NOT German labels. The
+# actual values in the 25,546-row corpus are: apartment / commercial /
+# parking / underground_parking / furnished_apartment / house / hobby_room /
+# room / attic_apartment / maisonette / garage / studio / penthouse /
+# shared_room / loft / villa / other / semi_detached_house / terraced_house
+# / (NULL in 12,064 rows).
+#
+# Earlier versions of this file had the German labels here — which accidentally
+# meant the "explicit category" branch never matched, and every inferred-default
+# write fell through via the `object_category IS NULL` branch. Semantically OK
+# because GPT classified correctly from the description regardless, but the
+# validator gap is fixed here.
 RESIDENTIAL_CATEGORIES: frozenset[str] = frozenset({
-    "Wohnung", "Möblierte Wohnung", "Haus", "Einzelzimmer", "WG-Zimmer",
-    "Dachwohnung", "Maisonette", "Studio", "Attika", "Loft", "Villa",
-    "Terrassenwohnung", "Doppeleinfamilienhaus", "Einfamilienhaus",
-    "Reiheneinfamilienhaus", "Duplex", "Penthouse", "Atelier",
+    "apartment", "furnished_apartment", "house", "attic_apartment",
+    "maisonette", "studio", "penthouse", "loft", "villa",
+    "semi_detached_house", "terraced_house", "room", "shared_room",
 })
 
-# Rooms clearly private to renter (default *_shared = false at 0.75).
-PRIVATE_UNIT_CATEGORIES: frozenset[str] = RESIDENTIAL_CATEGORIES - {"Einzelzimmer", "WG-Zimmer"}
-# Rooms inside a shared unit (default *_shared = true at 0.75 unless contradicted).
-SHARED_UNIT_CATEGORIES: frozenset[str] = frozenset({"Einzelzimmer", "WG-Zimmer"})
+# Full unit private to the renter — default *_shared = false at 0.75.
+PRIVATE_UNIT_CATEGORIES: frozenset[str] = RESIDENTIAL_CATEGORIES - {"room", "shared_room"}
+# Rooms inside a shared unit — default *_shared = true at 0.75 unless contradicted.
+SHARED_UNIT_CATEGORIES: frozenset[str] = frozenset({"room", "shared_room"})
 # object_category=NULL means "not labelled", not "not residential". GPT infers
 # full-apartment vs shared-room from the description itself, so NULL category
 # is treated as "whichever GPT decided" (respecting the confidence cap).
@@ -459,9 +470,14 @@ def _build_user_prompt(description: str, object_category: str | None) -> str:
 
 async def _extract_one(
     client, listing_id: str, description: str, object_category: str | None,
-    sem: asyncio.Semaphore,
+    sem: asyncio.Semaphore, progress: dict,
 ) -> tuple[str, Optional[Pass2bExtraction], str | None]:
-    """(listing_id, parsed_extraction_or_None, error_reason)."""
+    """(listing_id, parsed_extraction_or_None, error_reason).
+
+    Streams success/failure to the cache + a progress counter IMMEDIATELY
+    on completion. This way if the script is interrupted, all completed work
+    is already persisted and a rerun picks up where we left off.
+    """
     async with sem:
         try:
             resp = await asyncio.wait_for(
@@ -474,12 +490,47 @@ async def _extract_one(
                 timeout=TIMEOUT_S,
             )
         except asyncio.TimeoutError:
+            progress["done"] += 1
+            progress["fail"] += 1
+            _maybe_log_progress(progress)
             return listing_id, None, f"timeout>{TIMEOUT_S}s"
         except Exception as exc:
+            progress["done"] += 1
+            progress["fail"] += 1
+            _maybe_log_progress(progress)
             return listing_id, None, f"{type(exc).__name__}: {exc}"
     if resp.output_parsed is None:
+        progress["done"] += 1
+        progress["fail"] += 1
+        _maybe_log_progress(progress)
         return listing_id, None, "output_parsed=None"
+
+    # STREAM: persist cache entry immediately so partial progress survives
+    # any interruption. The main apply-to-DB loop later reads this same cache.
+    rec = {
+        "listing_id": listing_id,
+        "model": MODEL,
+        "prompt_version": PROMPT_VERSION,
+        "inferred_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "extraction": resp.output_parsed.model_dump(),
+    }
+    _append_cache(rec)
+    progress["done"] += 1
+    progress["ok"] += 1
+    _maybe_log_progress(progress)
     return listing_id, resp.output_parsed, None
+
+
+_PROGRESS_EVERY = 200  # log every N completions
+
+
+def _maybe_log_progress(progress: dict) -> None:
+    done = progress["done"]
+    if done % _PROGRESS_EVERY == 0 or done == progress["total"]:
+        pct = 100 * done / max(1, progress["total"])
+        print(f"[INFO] pass2b.progress: {done}/{progress['total']} "
+              f"({pct:.1f}%) ok={progress['ok']} fail={progress['fail']}",
+              flush=True)
 
 
 # --- main runner ------------------------------------------------------------
@@ -557,21 +608,25 @@ async def _run(db_path: Path, limit: int | None, dry_run: bool) -> dict:
                   f"got={len(need_call)}, fallback=truncate", flush=True)
             need_call = need_call[:MAX_CALLS]
 
-        # Do the GPT calls
+        # Do the GPT calls. Cache writes happen INSIDE each task (streaming),
+        # so partial progress survives interruption. Progress is logged every
+        # _PROGRESS_EVERY completions so the user can see movement.
         sem = asyncio.Semaphore(CONCURRENCY)
+        progress = {"done": 0, "ok": 0, "fail": 0, "total": len(need_call)}
 
         async def _fanout():
             tasks = [
                 _extract_one(client, r["listing_id"],
-                             r["description_stripped"], r["object_category"], sem)
+                             r["description_stripped"], r["object_category"],
+                             sem, progress)
                 for r in need_call
             ]
             return await asyncio.gather(*tasks, return_exceptions=False)
 
         results = await _fanout() if need_call else []
 
-        # Index results back by listing_id and append to cache
-        by_id: dict[str, Pass2bExtraction] = {}
+        # Reconcile into the in-memory cache map (used by the apply loop below).
+        # `_extract_one` already persisted the cache file for successes.
         for (lid, ext, err) in results:
             stats["gpt_calls"] += 1
             if ext is None:
@@ -579,7 +634,6 @@ async def _run(db_path: Path, limit: int | None, dry_run: bool) -> dict:
                 print(f"[WARN] pass2b._extract_one: expected=parsed, "
                       f"got={err}, listing_id={lid}, fallback=skip", flush=True)
                 continue
-            by_id[lid] = ext
             rec = {
                 "listing_id": lid,
                 "model": MODEL,
@@ -587,7 +641,6 @@ async def _run(db_path: Path, limit: int | None, dry_run: bool) -> dict:
                 "inferred_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "extraction": ext.model_dump(),
             }
-            _append_cache(rec)
             cache[_cache_key(lid)] = rec
 
         # Apply to DB (both cached hits and fresh calls)

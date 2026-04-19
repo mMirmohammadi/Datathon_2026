@@ -108,7 +108,7 @@ class TestRowIsInScope:
         assert _row_is_in_scope("Zimmer in 4er-WG.", None)
 
     def test_residential_category_matches_without_keywords(self):
-        assert _row_is_in_scope("Vague teaser text.", "Wohnung")
+        assert _row_is_in_scope("Vague teaser text.", "apartment")
 
     def test_gewerbeobjekt_no_match(self):
         assert not _row_is_in_scope("Büro in zentraler Lage.", "Gewerbeobjekt")
@@ -135,7 +135,7 @@ class TestValidateRawSnippet:
         ok, _ = _validate_raw_snippet(
             raw_snippet=None, description=self.DESC,
             value=None, confidence=0.0,
-            field_name="bathroom_count", object_category="Wohnung",
+            field_name="bathroom_count", object_category="apartment",
         )
         assert ok
 
@@ -143,7 +143,7 @@ class TestValidateRawSnippet:
         ok, _ = _validate_raw_snippet(
             raw_snippet="Badezimmer", description=self.DESC,
             value="1", confidence=0.9,
-            field_name="bathroom_count", object_category="Wohnung",
+            field_name="bathroom_count", object_category="apartment",
         )
         assert ok
 
@@ -153,7 +153,7 @@ class TestValidateRawSnippet:
         ok, _ = _validate_raw_snippet(
             raw_snippet="2 Bäder/Dusche", description=desc_nbsp,
             value="2", confidence=0.9,
-            field_name="bathroom_count", object_category="Wohnung",
+            field_name="bathroom_count", object_category="apartment",
         )
         assert ok
 
@@ -162,7 +162,7 @@ class TestValidateRawSnippet:
         ok, why = _validate_raw_snippet(
             raw_snippet="Jacuzzi im Badezimmer", description=self.DESC,
             value="1", confidence=0.9,
-            field_name="bathroom_count", object_category="Wohnung",
+            field_name="bathroom_count", object_category="apartment",
         )
         assert not ok
         assert "not a substring" in why
@@ -171,25 +171,27 @@ class TestValidateRawSnippet:
         ok, why = _validate_raw_snippet(
             raw_snippet="", description=self.DESC,
             value="1", confidence=0.9,
-            field_name="bathroom_count", object_category="Wohnung",
+            field_name="bathroom_count", object_category="apartment",
         )
         assert not ok
 
-    def test_inferred_default_false_shared_on_wohnung(self):
-        """Full apartment → bathroom_shared=false @ 0.75, no snippet required."""
+    def test_inferred_default_false_shared_on_apartment(self):
+        """Full apartment → bathroom_shared=false @ 0.75, no snippet required.
+        (Category slug is 'apartment', not German 'apartment' — matches DB.)
+        """
         ok, _ = _validate_raw_snippet(
             raw_snippet=None, description=self.DESC,
             value="false", confidence=0.75,
-            field_name="bathroom_shared", object_category="Wohnung",
+            field_name="bathroom_shared", object_category="apartment",
         )
         assert ok
 
-    def test_inferred_default_true_shared_on_wg_zimmer(self):
-        """WG-Zimmer → bathroom_shared=true @ 0.75, no snippet required."""
+    def test_inferred_default_true_shared_on_shared_room(self):
+        """shared_room → bathroom_shared=true @ 0.75, no snippet required."""
         ok, _ = _validate_raw_snippet(
             raw_snippet=None, description=self.DESC,
             value="true", confidence=0.75,
-            field_name="bathroom_shared", object_category="WG-Zimmer",
+            field_name="bathroom_shared", object_category="shared_room",
         )
         assert ok
 
@@ -198,7 +200,7 @@ class TestValidateRawSnippet:
         ok, why = _validate_raw_snippet(
             raw_snippet=None, description=self.DESC,
             value="true", confidence=0.70,
-            field_name="kitchen_shared", object_category="Wohnung",
+            field_name="kitchen_shared", object_category="apartment",
         )
         assert not ok  # full unit + true without snippet is contradictory
 
@@ -207,7 +209,7 @@ class TestValidateRawSnippet:
         ok, why = _validate_raw_snippet(
             raw_snippet=None, description=self.DESC,
             value="false", confidence=0.95,
-            field_name="bathroom_shared", object_category="Wohnung",
+            field_name="bathroom_shared", object_category="apartment",
         )
         assert not ok
 
@@ -216,7 +218,7 @@ class TestValidateRawSnippet:
         ok, _ = _validate_raw_snippet(
             raw_snippet=None, description=self.DESC,
             value="true", confidence=0.70,
-            field_name="has_cellar", object_category="Wohnung",
+            field_name="has_cellar", object_category="apartment",
         )
         assert ok
 
@@ -246,7 +248,7 @@ class TestValidateRawSnippet:
         ok, _ = _validate_raw_snippet(
             raw_snippet=None, description=self.DESC,
             value="true", confidence=0.75,
-            field_name="bathroom_shared", object_category="Wohnung",
+            field_name="bathroom_shared", object_category="apartment",
         )
         assert not ok
 
@@ -273,7 +275,7 @@ class TestAuditorFixtures:
             has_cellar=_mk(None, 0.0, None),
             kitchen_shared=_mk("false", 0.75, None),
         )
-        writes, warnings = _validate_extraction(ext, desc, "Wohnung")
+        writes, warnings = _validate_extraction(ext, desc, "apartment")
         assert warnings == []
         assert "bathroom_count" in writes and writes["bathroom_count"][0] == "1"
         assert writes["bathroom_shared"][0] == "false"
@@ -289,7 +291,7 @@ class TestAuditorFixtures:
             has_cellar=_mk("true", 0.85, "Eigener Kellerabteil zur Mitbenützung"),
             kitchen_shared=_mk("true", 0.90, "Gemeinschaftsküche"),
         )
-        writes, warnings = _validate_extraction(ext, desc, "WG-Zimmer")
+        writes, warnings = _validate_extraction(ext, desc, "shared_room")
         assert warnings == []
         assert writes["bathroom_count"] == ("1", 0.80, "Gemeinsames Badezimmer")
         assert writes["bathroom_shared"] == ("true", 0.90, "Gemeinsames Badezimmer")
@@ -305,7 +307,7 @@ class TestAuditorFixtures:
             has_cellar=_mk(None, 0.0, None),
             kitchen_shared=_mk("false", 0.75, None),
         )
-        writes, warnings = _validate_extraction(ext, desc, "Wohnung")
+        writes, warnings = _validate_extraction(ext, desc, "apartment")
         assert warnings == []
         assert "bathroom_count" not in writes
         assert writes["bathroom_shared"] == ("false", 0.75, None)
@@ -323,7 +325,7 @@ class TestAuditorFixtures:
             has_cellar=_mk("true", 0.85, "Cantina ad uso comune"),
             kitchen_shared=_mk("false", 0.75, None),
         )
-        writes, warnings = _validate_extraction(ext, desc, "Wohnung")
+        writes, warnings = _validate_extraction(ext, desc, "apartment")
         assert warnings == []
         assert writes["bathroom_count"][0] == "1"
         assert writes["has_cellar"][0] == "true"  # shared cellar still counts
@@ -364,7 +366,7 @@ class TestAuditorFixtures:
             has_cellar=_mk("true", 0.85, "Keller"),
             kitchen_shared=_mk("false", 0.75, None),
         )
-        writes, warnings = _validate_extraction(ext, desc, "Wohnung")
+        writes, warnings = _validate_extraction(ext, desc, "apartment")
         assert warnings == []
         assert writes["bathroom_count"][0] == "1"
         assert writes["has_cellar"][0] == "true"
