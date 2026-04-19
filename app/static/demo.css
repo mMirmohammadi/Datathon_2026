@@ -950,12 +950,11 @@ code {
   border-left: 3px solid #fb923c;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 140px;
-  overflow: hidden;
-  position: relative;
+  /* No max-height: the full listing description is always visible on the
+   * card. The inline "show more" affordance is a pure data-reveal panel
+   * (hard-filter checks / keyword hits / memory channels / soft facts /
+   * photos), so the user never has to click to read the core text. */
 }
-
-.listing-card.expanded .listing-desc { max-height: none; }
 
 .listing-desc.empty { color: var(--muted); font-style: italic; border-left-color: var(--border); }
 
@@ -1601,8 +1600,16 @@ code {
     0 4px 12px rgba(15, 23, 42, 0.1);
   max-width: 440px;
   width: min(440px, 94vw);
-  background: #fff;
-  color: var(--ink);
+  /* Cap the dialog at the viewport so tall content (listing-detail with
+   * image + meta + actions + address + nearby chips + features + bathroom
+   * chips + long description + footer) doesn't extend past the screen with
+   * no scroll. Pairs with the overflow rules on .modal-inner / .modal-body
+   * below to make the BODY scroll while the HEAD stays pinned, so the ×
+   * close button is always reachable. */
+  max-height: 92vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal::backdrop {
@@ -1615,6 +1622,12 @@ code {
   flex-direction: column;
   gap: 14px;
   padding: 22px 26px 24px;
+  /* Fill the dialog vertically so the child .modal-body (flex:1) can
+   * consume remaining space and scroll within. min-height:0 is the
+   * classic "let me actually shrink" unlock for flex children. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .modal-head {
@@ -1622,6 +1635,8 @@ code {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  /* Pinned; never shrinks or scrolls with the body. */
+  flex-shrink: 0;
 }
 
 .modal-head h2 {
@@ -1698,6 +1713,15 @@ code {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* Scrollable body — this is what actually lets the user reach the
+   * bottom of a tall listing-detail modal. min-height:0 allows the flex
+   * item to shrink past its intrinsic content height so the overflow-y
+   * kicks in (without it, flex keeps the child at content-size and the
+   * whole dialog overflows the viewport silently). */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .auth-field {
@@ -1734,10 +1758,20 @@ code {
   border-top: 1px dashed var(--border);
 }
 
+/* `<dialog>` is `display: none` by default and becomes `display: block` once
+ * `.showModal()` opens it. We overrode `.modal` to `display: flex`, so we
+ * must explicitly restore "none" for closed dialogs — otherwise the
+ * unopened modal paints into the page flow. */
+.modal:not([open]) { display: none; }
+
 .modal-foot {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  /* Pinned at the bottom of the dialog; never scrolls with the body.
+   * Keeps auth "Sign in" / "Delete account" buttons always reachable
+   * even on long forms in short viewports. */
+  flex-shrink: 0;
 }
 
 .modal-foot.spread {

@@ -112,12 +112,20 @@ def test_soft_fact_quiet_interpretation() -> None:
     assert fact.interpretation == "poor"
 
 
-def test_soft_fact_transit_close_and_many_lines_is_good() -> None:
+def test_soft_fact_transit_close_is_good_and_omits_lines_count() -> None:
+    """After the "100 lines" strip, the transit fact:
+
+    * interpretation is determined by distance alone (< 300m → good)
+    * the string NEVER includes the meaningless clamped lines count even if
+      the row carries one
+    * stop name + distance still render
+    """
     listing = _listing()
     hard = HardFilters(soft_preferences=SoftPreferences(near_public_transport=True))
     row = _make_row({
         "dist_nearest_stop_m": 50.0,
         "nearest_stop_name": "Zurich HB",
+        "nearest_stop_type": "train",
         "nearest_stop_lines_count_clamped": 80,
         "nearest_stop_lines_count": 500,
     })
@@ -126,6 +134,33 @@ def test_soft_fact_transit_close_and_many_lines_is_good() -> None:
     assert fact.interpretation == "good"
     assert "Zurich HB" in fact.value
     assert "50 m" in fact.value
+    # Guard against regression: the string must not contain any "N line(s)"
+    # fragment even when the row provides both the clamped and raw counts.
+    assert "lines" not in fact.value, (
+        f"transit fact must not include the lines count: {fact.value!r}"
+    )
+    assert "line " not in fact.value, (
+        f"transit fact must not include singular 'line ': {fact.value!r}"
+    )
+
+
+def test_soft_fact_transit_interp_is_distance_only() -> None:
+    """Single-line stop at 250 m must still be 'good' (tier is distance-only)."""
+    listing = _listing()
+    hard = HardFilters(soft_preferences=SoftPreferences(near_public_transport=True))
+    row = _make_row({
+        "dist_nearest_stop_m": 250.0,
+        "nearest_stop_name": "Rural Stop",
+        "nearest_stop_type": "bus",
+        "nearest_stop_lines_count_clamped": 1,  # old logic would demote to "ok"
+        "nearest_stop_lines_count": 1,
+    })
+    md = build_match_detail(listing=listing, hard=hard, signal_row=row)
+    fact = next(f for f in md.soft_facts if f.axis == "near_public_transport")
+    assert fact.interpretation == "good", (
+        "250 m stop must be 'good' under distance-only tier"
+    )
+    assert "lines" not in fact.value
 
 
 def test_soft_fact_price_sentiment_cheap_when_below_baseline() -> None:

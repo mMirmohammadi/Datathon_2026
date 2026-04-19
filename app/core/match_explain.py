@@ -376,10 +376,27 @@ def _stop_icon(stop_type: str | None) -> str:
 
 
 def _transit_fact(row: sqlite3.Row | None) -> MatchFact:
+    """Nearest public-transport stop fact.
+
+    We intentionally do NOT display the ``nearest_stop_lines_count`` column:
+    the raw values have outliers (Genève HB reports ~41'000) and the
+    ``_clamped`` sibling is ceilinged at 100 — so every well-connected stop
+    rendered as the meaningless string "100 lines". Stripping that string
+    removes the noise without losing information: the combination of stop
+    name + distance + modal (``type: tram`` / ``type: bus`` / ...) already
+    conveys how well-served the listing is.
+
+    Interpretation tier therefore depends on distance alone:
+      * < 300 m  → good
+      * < 600 m  → ok
+      * otherwise → poor
+    This matches the old behaviour for every listing where the clamped
+    count had hit the ceiling (≥2 lines). For stops with only 1 line the
+    old tier would have demoted "good" → "ok"; we lift that constraint
+    because a 250 m walk is a good-quality stop even if only one bus
+    serves it, and the raw lines count was too noisy to condition on.
+    """
     dist = _safe(row, "dist_nearest_stop_m")
-    lines = _safe(row, "nearest_stop_lines_count_clamped")
-    if lines is None:
-        lines = _safe(row, "nearest_stop_lines_count")
     name = _safe(row, "nearest_stop_name")
     stop_type = _safe(row, "nearest_stop_type")
     if dist is None:
@@ -399,10 +416,7 @@ def _transit_fact(row: sqlite3.Row | None) -> MatchFact:
     ]
     if stop_type:
         pieces.append(f"type: {stop_type}")
-    if lines is not None:
-        pieces.append(f"{int(lines)} line{'s' if int(lines) != 1 else ''}")
-    # < 300 m + ≥ 2 lines → good; < 600 m → ok; otherwise poor.
-    if dist < 300 and (lines or 0) >= 2:
+    if dist < 300:
         interp = _INTERP_GOOD
     elif dist < 600:
         interp = _INTERP_OK
