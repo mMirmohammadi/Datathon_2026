@@ -460,7 +460,8 @@ def search_listing_coords(
     where_clauses, params = _build_where_and_params(filters)
 
     query = """
-        SELECT l.listing_id, l.latitude, l.longitude, l.city, l.canton
+        SELECT l.listing_id, l.latitude, l.longitude, l.city, l.canton,
+               l.price, l.rooms, l.area, l.object_category
         FROM listings l
         LEFT JOIN listings_enriched e ON e.listing_id = l.listing_id
     """
@@ -479,6 +480,7 @@ def search_listing_coords(
         lng = d.get("longitude")
         if lat is None or lng is None:
             continue  # unmappable; the card still appears in list results.
+        area = d.get("area")
         out.append(
             {
                 "listing_id": str(d["listing_id"]),
@@ -486,6 +488,10 @@ def search_listing_coords(
                 "lng": float(lng),
                 "city": d.get("city"),
                 "canton": d.get("canton"),
+                "price_chf": d.get("price"),
+                "rooms": d.get("rooms"),
+                "living_area_sqm": int(area) if area is not None else None,
+                "object_category": d.get("object_category"),
             }
         )
     return out

@@ -975,72 +975,345 @@ code {
   font-weight: 500;
 }
 
-/* ----- Map overlay panel ------------------------------------------------ */
-/* Sits inside .listings-panel above the card grid. Fixed height so the page
-   layout doesn't reflow when the map fit-bounds animates. */
-.map-panel {
-  margin: 0 0 14px;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #f7f8fa;
-  border: 1px solid var(--border);
-  position: relative;
-}
+/* =========================================================================
+   MAP VIEW — Leaflet-based geographic overlay, full-height tab panel.
+   Layering (top of stack wins):
+     (1) Leaflet tiles                         basemap
+     (2) .result-hull SVG path                 "selected area" soft-fill
+     (3) .landmark-pin DivIcon                 curated landmarks (always on)
+     (4) .listing-dot circle (canvas)          per-listing markers
+     (5) .cluster-{xs..xl} DivIcons            marker-cluster aggregates
+     (6) .map-floating-ui (DOM, absolute)      counter chip + area-filter pill
+     (7) .leaflet-bar                          zoom + recenter controls
+   Layout: all overlays are position:absolute inside .view-map-pane, which
+   owns a fixed vh-based height so the topbar can't be pushed around while
+   the map animates (kills the jitter bug from the earlier iteration).
+   ========================================================================= */
 
-.map-panel-head {
+/* ----- View tabs (List / Map toggle) ----------------------------------- */
+.view-tabs {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  background: #ffffff;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted);
-  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding: 4px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  border: 1px solid var(--border);
+  width: fit-content;
 }
 
-.map-panel-title {
-  font-weight: 600;
+.view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+  user-select: none;
+}
+
+.view-tab:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.6);
   color: var(--ink);
 }
 
-.map-counter {
-  font-variant-numeric: tabular-nums;
+.view-tab.active {
+  background: #ffffff;
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 3px 8px rgba(0, 0, 0, 0.04);
 }
 
-/* Clickable pill shown after a cluster click, letting the user reset the
-   in-area card filter. Hidden until `activeAreaFilter` is non-null. */
+.view-tab-ico { font-size: 14px; line-height: 1; }
+
+.view-tab-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+.view-tab.active .view-tab-count { background: #fde68a; }
+
+/* ----- View panes ----------------------------------------------------- */
+.view-map-pane {
+  position: relative;
+  height: 72vh;
+  min-height: 480px;
+  max-height: 820px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #eef0f2;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 28px rgba(0, 0, 0, 0.04);
+}
+
+.map { height: 100%; width: 100%; }
+
+.leaflet-container {
+  font-family: inherit;
+  font-size: 12px;
+  background: #eef0f2;
+}
+
+/* ----- Floating UI over the map --------------------------------------- */
+.map-floating-ui {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 500;                 /* under Leaflet popups (700), above tiles */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.map-counter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 16px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: auto;
+  animation: float-ui-in 0.4s ease-out;
+}
+
+.map-counter-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fbbf24;
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.25);
+}
+
 .map-area-pill {
-  margin-left: auto;
-  padding: 4px 11px;
+  display: inline-block;
+  padding: 6px 13px;
   border-radius: 999px;
   border: 1px solid #fcd6b4;
-  background: #fff7ed;
+  background: rgba(255, 247, 237, 0.98);
   color: #9a3412;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: transform 0.08s ease, background 0.15s ease;
+  transition: transform 0.12s ease, background 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 16px rgba(0, 0, 0, 0.06);
+  pointer-events: auto;
+  animation: float-ui-in 0.35s ease-out;
 }
 
 .map-area-pill:hover {
   background: #ffedd5;
   transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06), 0 10px 22px rgba(0, 0, 0, 0.08);
 }
 
-.map {
-  height: 380px;
+.map-area-pill::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+  vertical-align: middle;
+}
+
+@keyframes float-ui-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ----- Recenter control (L.Control extension) ------------------------- */
+.map-recenter-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: #ffffff;
+  color: #1f2937;
+  border: 0;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.map-recenter-btn:hover:not(:disabled) {
+  background: #fff7ed;
+  color: #b45309;
+}
+
+.map-recenter-btn:disabled { color: #d1d5db; cursor: not-allowed; }
+
+.map-recenter-btn.is-enabled { color: #b45309; }
+
+/* ----- Cluster icons (custom DivIcons) -------------------------------- */
+.cluster-xs .cluster-inner,
+.cluster-md .cluster-inner,
+.cluster-lg .cluster-inner,
+.cluster-xl .cluster-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  background: #e5e7eb;
-}
-
-.leaflet-container {
-  font-family: inherit;
+  height: 100%;
+  border-radius: 50%;
+  color: #78350f;
+  font-weight: 600;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background: radial-gradient(circle at 35% 30%, #fde68a 0%, #fcd34d 55%, #f59e0b 100%);
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.9),
+    0 2px 4px rgba(120, 53, 15, 0.18),
+    0 8px 18px rgba(120, 53, 15, 0.14);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
-/* Card pulse: briefly highlights a listing card when the user clicked its
-   marker on the map. Outline-only so neighbouring cards don't reflow. */
+.cluster-xs .cluster-inner:hover,
+.cluster-md .cluster-inner:hover,
+.cluster-lg .cluster-inner:hover,
+.cluster-xl .cluster-inner:hover {
+  transform: scale(1.06);
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.95),
+    0 4px 6px rgba(120, 53, 15, 0.22),
+    0 14px 26px rgba(120, 53, 15, 0.18);
+}
+
+.cluster-xl .cluster-inner { font-size: 14px; }
+.cluster-lg .cluster-inner { font-size: 13px; }
+
+/* ----- Listing tooltip (hover mini-card) ------------------------------ */
+.listing-tooltip {
+  background: #ffffff !important;
+  border: 1px solid var(--border) !important;
+  color: var(--ink) !important;
+  border-radius: 10px !important;
+  padding: 0 !important;
+  font-family: inherit !important;
+  font-size: 12px !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06), 0 12px 28px rgba(0, 0, 0, 0.12) !important;
+  opacity: 0;
+  animation: tt-in 0.15s ease-out forwards;
+}
+
+.listing-tooltip::before { border-top-color: var(--border) !important; }
+
+@keyframes tt-in { to { opacity: 1; } }
+
+.listing-tooltip-inner {
+  padding: 8px 11px;
+  min-width: 140px;
+}
+
+.listing-tooltip-inner .tt-line1 {
+  font-size: 13px;
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.listing-tooltip-inner .tt-line2 {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.listing-tooltip-inner .tt-hint {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-size: 10px;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ----- Landmark pins (always-on curated layer) ------------------------ */
+.landmark-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.landmark-pin-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(37, 99, 235, 0.3),
+    0 4px 10px rgba(37, 99, 235, 0.22);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.landmark-pin:hover .landmark-pin-dot {
+  transform: scale(1.35);
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 1),
+    0 2px 4px rgba(37, 99, 235, 0.35),
+    0 8px 18px rgba(37, 99, 235, 0.3);
+}
+
+/* Palette derived from the 7 kinds actually present in data/ranking/landmarks.json
+   (cultural, employer, lake, neighborhood, oldtown, transit, university). Each
+   stays muted so the map doesn't turn into a rainbow. */
+.landmark-pin.landmark-university    .landmark-pin-dot { background: #4f46e5; }
+.landmark-pin.landmark-transit       .landmark-pin-dot { background: #334155; }
+.landmark-pin.landmark-lake          .landmark-pin-dot { background: #0891b2; }
+.landmark-pin.landmark-employer      .landmark-pin-dot { background: #db2777; }
+.landmark-pin.landmark-oldtown       .landmark-pin-dot { background: #a16207; }
+.landmark-pin.landmark-cultural      .landmark-pin-dot { background: #9333ea; }
+.landmark-pin.landmark-neighborhood  .landmark-pin-dot { background: #0d9488; }
+
+.landmark-tooltip {
+  background: #1f2937 !important;
+  color: #f9fafb !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  padding: 5px 9px !important;
+  font-family: inherit !important;
+  font-size: 11px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18) !important;
+}
+
+.landmark-tooltip::before { border-top-color: #1f2937 !important; }
+
+.landmark-tooltip-inner .muted { color: #9ca3af; }
+
+/* ----- Result hull (convex polygon) ----------------------------------- */
+.result-hull {
+  animation: hull-in 0.6s ease-out;
+  pointer-events: none;
+}
+
+@keyframes hull-in {
+  from { stroke-opacity: 0; fill-opacity: 0; }
+  to   { stroke-opacity: 0.45; fill-opacity: 0.08; }
+}
+
+/* ----- Card pulse (marker click highlight) ---------------------------- */
 @keyframes listing-card-pulse {
   0%   { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.65); }
   70%  { box-shadow: 0 0 0 14px rgba(251, 191, 36, 0); }

@@ -270,6 +270,11 @@ class MapPoint(BaseModel):
     """One dot on the ``/demo`` map overlay. One row per filter-matched
     listing that has a known lat/lng (listings with NULL coords are dropped
     from the map layer but still appear in the ranked text results).
+
+    Includes the handful of fields the hover tooltip needs (price, rooms,
+    area, object_category) so the UI can render rich tooltips without a
+    second round-trip per marker. Payload at 25k rows ≈ 3 MB; typical
+    filtered query at ~500 rows ≈ 60 KB.
     """
 
     listing_id: str
@@ -277,6 +282,28 @@ class MapPoint(BaseModel):
     lng: float
     city: str | None = None
     canton: str | None = None
+    # Tooltip fields. Match the semantics of ListingData so the frontend can
+    # reuse its existing formatters (`chf()`, etc.).
+    price_chf: int | None = None
+    rooms: float | None = None
+    living_area_sqm: int | None = None
+    object_category: str | None = None
+
+
+class LandmarkPoint(BaseModel):
+    """Curated Swiss landmark for the map's standing-overlay layer.
+
+    45 hand-picked entries (HBs, universities, lakes, employer HQs, old towns)
+    that the map always renders so the user has geographical anchors while
+    panning. Distinct from MapPoint — listings come and go with each query,
+    landmarks are persistent.
+    """
+
+    key: str
+    name: str
+    category: str
+    lat: float
+    lng: float
 
 
 class ListingsMapRequest(BaseModel):

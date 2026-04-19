@@ -17,6 +17,7 @@ from app.core.dinov2_search import (
 )
 from app.core.hard_filters import _parse_row, search_listing_coords
 from app.core.landmark_proximity import compute_for_one as compute_nearby_landmarks
+from app.core.landmarks import all_landmarks
 from app.db import get_connection
 from app.harness.search_service import (
     default_feed,
@@ -27,6 +28,7 @@ from app.harness.search_service import (
 from app.models.schemas import (
     HealthResponse,
     ImageSearchResponse,
+    LandmarkPoint,
     ListingData,
     ListingsMapRequest,
     ListingsMapResponse,
@@ -134,6 +136,40 @@ def listings_search(request: ListingsSearchRequest) -> ListingsResponse:
         db_path=settings.db_path,
         hard_facts=request.hard_filters,
     )
+
+
+def _landmark_display_name(lm) -> str:
+    """Human-friendly name for a landmark entry.
+
+    Prefers the first (shortest) alias if present — that's usually the
+    locally-used shorthand (``"ETH"``, ``"HB Zürich"``) rather than the full
+    OSM display name. Falls back to a title-cased key (``eth_zentrum``
+    -> ``"Eth Zentrum"``).
+    """
+    if lm.aliases:
+        return lm.aliases[0]
+    return lm.key.replace("_", " ").title()
+
+
+@router.get("/landmarks", response_model=list[LandmarkPoint])
+def landmarks() -> list[LandmarkPoint]:
+    """Every curated Swiss landmark, projected to the tiny shape the map
+    overlay needs. Served once at page load and kept in the browser — the
+    list is ~45 entries and changes rarely, so we trade a bit of upfront
+    bandwidth for zero request churn while the user pans.
+    """
+    out: list[LandmarkPoint] = []
+    for lm in all_landmarks():
+        out.append(
+            LandmarkPoint(
+                key=lm.key,
+                name=_landmark_display_name(lm),
+                category=lm.kind,
+                lat=float(lm.lat),
+                lng=float(lm.lon),
+            )
+        )
+    return out
 
 
 @router.post("/listings/map", response_model=ListingsMapResponse)

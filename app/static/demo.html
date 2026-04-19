@@ -275,26 +275,57 @@
       </details>
     </section>
 
-    <!-- RESULTS: listings on the left, optional detail side-panel on the right -->
+    <!-- RESULTS: listings on the left (tabbed: List / Map), detail panel on the right -->
     <main class="results-grid">
       <section class="listings-panel">
         <div id="result-status" class="muted"></div>
 
-        <!-- Map overlay. Starts at Switzerland bbox; after every search the
-             backend emits (lat,lng,listing_id) for every hard-filter match
-             (not just the 25 paginated cards) so the user sees the geographic
-             spread. Clicking a cluster filters the card grid below to just
-             that area; clicking a single marker scrolls to the matching card. -->
-        <section class="map-panel" id="map-panel" aria-label="Listing location map">
-          <div class="map-panel-head">
-            <span class="map-panel-title">📍 Where they are</span>
-            <span class="map-counter" id="map-counter">—</span>
-            <button type="button" class="map-area-pill" id="map-area-pill" hidden></button>
-          </div>
-          <div id="map" class="map"></div>
+        <!-- View tabs: user toggles between the card list and the full-height
+             map. Only one view is mounted/visible at a time, which also kills
+             the earlier layout-jitter bug (map's fit-bounds animation no
+             longer reflows the card list sitting below it). -->
+        <nav class="view-tabs" role="tablist" aria-label="Result view">
+          <button type="button" class="view-tab active" id="view-tab-list"
+                  role="tab" aria-selected="true" aria-controls="view-list"
+                  data-view="list">
+            <span class="view-tab-ico" aria-hidden="true">📋</span>
+            <span class="view-tab-label">List</span>
+            <span class="view-tab-count" id="view-tab-list-count" hidden></span>
+          </button>
+          <button type="button" class="view-tab" id="view-tab-map"
+                  role="tab" aria-selected="false" aria-controls="view-map"
+                  data-view="map">
+            <span class="view-tab-ico" aria-hidden="true">🗺️</span>
+            <span class="view-tab-label">Map</span>
+            <span class="view-tab-count" id="view-tab-map-count" hidden></span>
+          </button>
+        </nav>
+
+        <!-- LIST VIEW (default). Stays mounted so the saved-search drawer,
+             dismiss actions, and infinite-scroll state don't reset when the
+             user bounces between tabs. -->
+        <section id="view-list" class="view view-list-pane active"
+                 role="tabpanel" aria-labelledby="view-tab-list">
+          <div id="listings"></div>
         </section>
 
-        <div id="listings"></div>
+        <!-- MAP VIEW. Full-height panel; Leaflet's tile container is the only
+             element that owns its own scroll/zoom, so no layout reflow leaks
+             to the topbar. Map is initialised lazily when this tab is first
+             shown — cheap idempotent call to _initMapOnce. -->
+        <section id="view-map" class="view view-map-pane"
+                 role="tabpanel" aria-labelledby="view-tab-map" hidden>
+          <div id="map" class="map"></div>
+          <!-- Floating overlay: counter + area-filter pill. Positioned over
+               the map (absolute) so the map itself owns the visual frame. -->
+          <div class="map-floating-ui" role="group" aria-label="Map controls">
+            <div class="map-counter-chip">
+              <span class="map-counter-dot" aria-hidden="true"></span>
+              <span id="map-counter">—</span>
+            </div>
+            <button type="button" class="map-area-pill" id="map-area-pill" hidden></button>
+          </div>
+        </section>
       </section>
 
       <aside class="meta-panel" id="meta-panel" hidden>

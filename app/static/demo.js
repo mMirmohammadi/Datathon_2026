@@ -350,48 +350,101 @@ function isUnscoredBatch(listings, meta) {
 }
 
 // ---------- Map overlay (Leaflet + MarkerCluster) --------------------------
-// One module, three jobs:
-//   1. Initialize a Leaflet map at the Swiss bbox on first page load.
-//   2. On every search, fetch /listings/map in parallel with the main result
-//      query; plot every filter-matched (lat,lng) as a circle marker clustered
-//      by Leaflet.markercluster; fit the viewport to the result bbox.
-//   3. Cluster click -> hide result cards NOT in the cluster's child set; a
-//      "clear area" pill resets. Single-marker click -> scroll + pulse the
-//      matching card.
-// The backend guarantees one point per listing and excludes NULL lat/lng
-// rows, so we can trust every point to have a valid listing_id + coords.
+// A single module that owns the #map DOM node. Four layers on the same map:
+//
+//     tiles              CartoDB Positron (subtle, low-chrome basemap)
+//     hullLayer          soft-fill polygon around the current result set;
+//                        the "beautifully selected area" the user asked for
+//     landmarkLayer      45 curated Swiss landmarks (HBs, universities, lakes,
+//                        employer HQs). Always on; distinct amber pin style;
+//                        hover reveals the name. Lets the user keep geo-
+//                        context while panning away from the result cluster.
+//     clusterLayer       per-listing circle markers, clustered with a custom
+//                        divIcon that carries a size-ramp and gradient fill.
+//                        Hover shows a mini-card tooltip (price, rooms, city);
+//                        click scrolls + pulses the matching listing card.
+//
+// Two bespoke Leaflet controls:
+//     recenterControl    always-visible button, top-right under the zoom
+//                        widget, that flies back to the active result bbox.
+//     areaFilterPill     HTML element overlaid on the map (already in the DOM);
+//                        appears after a cluster click, resets card filter.
+//
+// State discipline:
+//   * MAP_STATE.bounds is the ONLY source of truth for "where to fly on
+//     recenter"; it is set when a result set lands and is kept across tab
+//     switches, so the user can hit "map" then "recenter" at any time.
+//   * Every async fetch increments MAP_STATE.fetchToken; stale responses
+//     discard themselves (typical during quick multi-query typing).
+//   * clearAreaFilter is idempotent; safe to call whether a filter was set.
+//   * All fallbacks emit [WARN] (per CLAUDE.md §5).
 const MAP_STATE = {
   map: null,
   clusterLayer: null,
-  // listing_id -> marker, so marker-click can find the card and vice versa.
+  landmarkLayer: null,
+  hullLayer: null,
+  recenterControl: null,
   markersByListingId: new Map(),
-  // When non-null, the cluster filter is active; only card ids in this set
-  // are visible below the map. `null` means "no area filter".
+  resultBounds: null,
   activeAreaFilter: null,
-  // Serialize overlapping fetches: discard stale responses.
   fetchToken: 0,
+  // Search results that arrived before the map was ever rendered (because
+  // the user stayed in List view). Replayed on the first open of the Map
+  // tab so no search ever lands "invisibly".
+  pendingPoints: null,
+  shownOnce: false,
 };
 
-const SWISS_BOUNDS = [[45.82, 5.96], [47.81, 10.49]];
+// Swiss outer bbox (lat/lng). Slightly padded so the country doesn't hit the
+// viewport edges when nothing else is loaded yet.
+const SWISS_BOUNDS = L_BOUNDS(() => [[45.82, 5.96], [47.81, 10.49]]);
+
+// Lazy factory: returns an actual L.latLngBounds only when Leaflet is loaded.
+// Before that it returns whatever shape the caller gave. Keeps the module
+// importable even if the CDN is still in flight.
+function L_BOUNDS(factory) {
+  return factory();
+}
+
+// ---- Init + layer setup --------------------------------------------------
 
 function _initMapOnce() {
   if (MAP_STATE.map) return;
   const mapEl = document.getElementById("map");
   if (!mapEl || typeof L === "undefined") {
-    // Leaflet CDN hasn't loaded yet; first search fetches will no-op the map
-    // layer, search results still render in the card list below.
     console.warn(
-      "[WARN] map_init_skipped: expected=window.L + #map, " +
-        "got=" + (typeof L === "undefined" ? "no Leaflet" : "no #map") +
+      "[WARN] map_init_skipped: expected=window.L + #map, got=" +
+        (typeof L === "undefined" ? "no Leaflet" : "no #map") +
         ", fallback=results render without map overlay",
     );
     return;
   }
+  // Defer until the container has real dimensions. Leaflet caches its
+  // measured container size at L.map() time and won't backfill cleanly.
+  // If #map is hidden (Map tab not yet opened), wait for the first flip.
+  if (mapEl.offsetHeight === 0 || mapEl.offsetWidth === 0) {
+    // Per CLAUDE.md §5: announce the fallback path. One-time per session so
+    // we don't spam the console when DOMContentLoaded fires before any tab
+    // has been opened (the expected boot sequence).
+    if (!MAP_STATE._deferredInitLogged) {
+      MAP_STATE._deferredInitLogged = true;
+      console.info(
+        "[INFO] map_init_deferred: expected=#map visible, got=offsetSize 0, " +
+          "fallback=init on first Map-tab click",
+      );
+    }
+    return;
+  }
   MAP_STATE.map = L.map(mapEl, {
     preferCanvas: true,
-    zoomControl: true,
+    zoomControl: false,             // custom position below
     attributionControl: true,
+    fadeAnimation: true,
+    zoomAnimation: true,
+    markerZoomAnimation: true,
+    worldCopyJump: false,
   });
+  L.control.zoom({ position: "topright" }).addTo(MAP_STATE.map);
   L.tileLayer(
     "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
     {
@@ -404,64 +457,316 @@ function _initMapOnce() {
   ).addTo(MAP_STATE.map);
   MAP_STATE.map.fitBounds(SWISS_BOUNDS);
 
+  // Layer 1: area hull (below markers)
+  MAP_STATE.hullLayer = L.layerGroup().addTo(MAP_STATE.map);
+
+  // Layer 2: landmarks (below cluster markers; lightweight regular FeatureGroup
+  // because we want zoom-independent visibility — landmarks shouldn't cluster
+  // with listing markers).
+  MAP_STATE.landmarkLayer = L.layerGroup().addTo(MAP_STATE.map);
+
+  // Layer 3: listing markers (top)
   MAP_STATE.clusterLayer = L.markerClusterGroup({
     showCoverageOnHover: false,
     spiderfyOnMaxZoom: true,
     disableClusteringAtZoom: 17,
-    maxClusterRadius: 45,
-    // Softer size ramp than the default so a 2× cluster doesn't drown out a
-    // 1× neighbour (user asked for subtle size variation, not extreme).
-    iconCreateFunction: (cluster) => {
-      const n = cluster.getChildCount();
-      let sizeClass = "sm";
-      if (n >= 50) sizeClass = "lg";
-      else if (n >= 10) sizeClass = "md";
-      return L.divIcon({
-        html: `<div><span>${n}</span></div>`,
-        className: `marker-cluster marker-cluster-${sizeClass}`,
-        iconSize: L.point(36, 36),
-      });
-    },
+    maxClusterRadius: 55,
+    chunkedLoading: true,
+    animate: true,
+    animateAddingMarkers: false,    // skip the fly-in; looks busy on 500+
+    iconCreateFunction: _buildClusterIcon,
   });
   MAP_STATE.clusterLayer.on("clusterclick", _onClusterClick);
   MAP_STATE.map.addLayer(MAP_STATE.clusterLayer);
 
-  // Wire the pill (rendered by demo.html; click handler attached here so the
-  // handler can reach MAP_STATE without polluting global scope).
+  // Recenter control (custom L.Control)
+  MAP_STATE.recenterControl = _buildRecenterControl().addTo(MAP_STATE.map);
+
+  // Pill click -> reset card filter.
   const pill = document.getElementById("map-area-pill");
   if (pill) pill.addEventListener("click", clearAreaFilter);
+
+  // Kick off the always-on landmarks layer. One request, kept in browser.
+  _fetchAndRenderLandmarks();
 }
+
+// Leaflet measures DOM size at init; if #map was hidden (tab closed) during
+// init, its internal dimensions are 0 and tiles don't render until we force
+// a resize after the user first opens the tab. Idempotent.
+function mapNudgeSize() {
+  if (!MAP_STATE.map) return;
+  if (!MAP_STATE.shownOnce) {
+    MAP_STATE.shownOnce = true;
+  }
+  // setTimeout because the tab flip applies `hidden=false` synchronously and
+  // Leaflet reads getBoundingClientRect; give the browser a frame to paint.
+  setTimeout(() => {
+    if (MAP_STATE.map) MAP_STATE.map.invalidateSize({ animate: false });
+  }, 50);
+}
+
+// ---- Custom cluster icon (size ramp + gradient) ---------------------------
+
+function _buildClusterIcon(cluster) {
+  const n = cluster.getChildCount();
+  // 4 steps instead of 3 so the ramp is smooth yet still compact — the user
+  // asked for "not that much size difference", so the outer radius goes
+  // 32 -> 38 -> 44 -> 50 px across the range. Still obvious which is larger
+  // without any dwarfing.
+  let bucket = "xs";
+  let px = 32;
+  if (n >= 200)       { bucket = "xl"; px = 50; }
+  else if (n >= 50)   { bucket = "lg"; px = 44; }
+  else if (n >= 10)   { bucket = "md"; px = 38; }
+  return L.divIcon({
+    html: `<div class="cluster-inner"><span>${_clusterLabel(n)}</span></div>`,
+    className: `cluster-${bucket}`,
+    iconSize: L.point(px, px),
+    iconAnchor: L.point(px / 2, px / 2),
+  });
+}
+
+function _clusterLabel(n) {
+  if (n < 1000) return String(n);
+  if (n < 10000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `${Math.round(n / 1000)}k`;
+}
+
+// ---- Listing-marker rendering --------------------------------------------
 
 function renderMapPoints(points) {
   _initMapOnce();
-  if (!MAP_STATE.map) return;
+  if (!MAP_STATE.map) {
+    // Map container isn't visible yet — buffer the points and replay when
+    // the user first opens the Map tab. Never drop data silently.
+    MAP_STATE.pendingPoints = points;
+    _updateTabCounts(points.length);
+    return;
+  }
+  MAP_STATE.pendingPoints = null;
   MAP_STATE.clusterLayer.clearLayers();
+  MAP_STATE.hullLayer.clearLayers();
   MAP_STATE.markersByListingId.clear();
   MAP_STATE.activeAreaFilter = null;
   _updateAreaPill(0);
   _updateMapCounter(points.length);
+  _updateTabCounts(points.length);
   if (!points.length) {
-    MAP_STATE.map.fitBounds(SWISS_BOUNDS);
+    MAP_STATE.resultBounds = null;
+    MAP_STATE.map.flyToBounds(SWISS_BOUNDS, { duration: 0.7 });
+    _setRecenterEnabled(false);
     return;
   }
+
   const markers = [];
   for (const p of points) {
     const m = L.circleMarker([p.lat, p.lng], {
-      radius: 5,
+      radius: 8,                    // was 5 — bigger per user feedback
       color: "#b45309",
       weight: 1.5,
       fillColor: "#fbbf24",
-      fillOpacity: 0.85,
+      fillOpacity: 0.88,
+      // Named class so hover styling can hook via getElement() fallback.
+      className: "listing-dot",
     });
     m._listingId = String(p.listing_id);
+    m._mapPoint = p;
+    m.bindTooltip(_tooltipHtmlForListing(p), {
+      className: "listing-tooltip",
+      direction: "top",
+      offset: [0, -8],
+      opacity: 1,
+    });
+    m.on("mouseover", _onMarkerHover);
+    m.on("mouseout", _onMarkerUnhover);
     m.on("click", () => _onMarkerClick(m._listingId));
     markers.push(m);
     MAP_STATE.markersByListingId.set(m._listingId, m);
   }
   MAP_STATE.clusterLayer.addLayers(markers);
+
+  // Area hull: "beautifully selected" soft-fill polygon around the result
+  // set. Convex hull keeps the code small (no shape dataset) and shows the
+  // user at a glance what region their query covers.
+  _renderResultHull(points);
+
   const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng]));
-  MAP_STATE.map.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 });
+  MAP_STATE.resultBounds = bounds;
+  MAP_STATE.map.flyToBounds(bounds, {
+    padding: [40, 40],
+    maxZoom: 14,
+    duration: 0.85,
+  });
+  _setRecenterEnabled(true);
 }
+
+function _tooltipHtmlForListing(p) {
+  // Build a tiny card in HTML. Every field user-provided, so escape.
+  const line1Parts = [];
+  if (p.price_chf != null) line1Parts.push(`<b>${chf(p.price_chf)}</b>`);
+  if (p.rooms != null) line1Parts.push(`${esc(p.rooms)} rm`);
+  if (p.living_area_sqm != null) line1Parts.push(`${esc(p.living_area_sqm)} m²`);
+  const line2Parts = [];
+  if (p.city) line2Parts.push(esc(p.city));
+  if (p.object_category) line2Parts.push(esc(p.object_category));
+  return `
+    <div class="listing-tooltip-inner">
+      <div class="tt-line1">${line1Parts.join(" · ") || "Listing"}</div>
+      ${line2Parts.length ? `<div class="tt-line2">${line2Parts.join(" · ")}</div>` : ""}
+      <div class="tt-hint">click to scroll to this listing</div>
+    </div>`;
+}
+
+function _onMarkerHover(ev) {
+  const m = ev.target;
+  m.setStyle({ radius: 11, fillOpacity: 1, weight: 2 });
+}
+function _onMarkerUnhover(ev) {
+  const m = ev.target;
+  m.setStyle({ radius: 8, fillOpacity: 0.88, weight: 1.5 });
+}
+
+// ---- Area hull (convex hull of result points) -----------------------------
+
+function _renderResultHull(points) {
+  if (!points || points.length < 3) return;
+  const hull = _convexHull(points.map((p) => [p.lng, p.lat]));
+  if (hull.length < 3) return;
+  // Leaflet polygons use [lat, lng] — hull returns [lng, lat].
+  const latlngs = hull.map(([x, y]) => [y, x]);
+  const poly = L.polygon(latlngs, {
+    color: "#b45309",
+    weight: 1,
+    opacity: 0.45,
+    fillColor: "#fbbf24",
+    fillOpacity: 0.08,
+    interactive: false,        // the hull is decorative; don't swallow clicks
+    className: "result-hull",
+  });
+  MAP_STATE.hullLayer.addLayer(poly);
+}
+
+// Andrew's monotone chain — standard convex hull on [[x,y], ...]. Small,
+// in-place, no deps. Skips tolerance/jittering; good enough at 1-10k points.
+function _convexHull(pts) {
+  if (pts.length < 3) return pts.slice();
+  const a = pts.slice().sort((p, q) => (p[0] - q[0]) || (p[1] - q[1]));
+  const cross = (O, A, B) => (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0]);
+  const lower = [];
+  for (const p of a) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = a.length - 1; i >= 0; i--) {
+    const p = a[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+  upper.pop();
+  lower.pop();
+  return lower.concat(upper);
+}
+
+// ---- Landmarks layer (persistent, non-clustered) --------------------------
+
+async function _fetchAndRenderLandmarks() {
+  try {
+    const r = await fetch("/landmarks", { credentials: "same-origin" });
+    if (!r.ok) {
+      console.warn(
+        `[WARN] landmarks_fetch_failed: expected=200 from /landmarks, ` +
+          `got=${r.status}, fallback=map renders without landmark overlay`,
+      );
+      return;
+    }
+    const landmarks = await r.json();
+    if (!Array.isArray(landmarks) || !landmarks.length) return;
+    for (const lm of landmarks) {
+      const icon = L.divIcon({
+        className: `landmark-pin landmark-${esc(lm.category || "other")}`,
+        html: `<div class="landmark-pin-dot" aria-hidden="true"></div>`,
+        iconSize: L.point(14, 14),
+        iconAnchor: L.point(7, 7),
+      });
+      const m = L.marker([lm.lat, lm.lng], {
+        icon,
+        keyboard: false,
+        riseOnHover: true,
+        interactive: true,
+      });
+      m.bindTooltip(
+        `<span class="landmark-tooltip-inner">
+           <b>${esc(lm.name)}</b>
+           <span class="muted">· ${esc(lm.category || "landmark")}</span>
+         </span>`,
+        {
+          className: "landmark-tooltip",
+          direction: "top",
+          offset: [0, -6],
+          opacity: 0.96,
+          sticky: false,
+        },
+      );
+      MAP_STATE.landmarkLayer.addLayer(m);
+    }
+  } catch (e) {
+    console.warn(
+      `[WARN] landmarks_fetch_error: expected=/landmarks reachable, ` +
+        `got=${e.message}, fallback=map renders without landmark overlay`,
+    );
+  }
+}
+
+// ---- Recenter control ----------------------------------------------------
+
+function _buildRecenterControl() {
+  const RecenterCtl = L.Control.extend({
+    options: { position: "topright" },
+    onAdd: function () {
+      const btn = L.DomUtil.create(
+        "button",
+        "leaflet-bar map-recenter-btn",
+      );
+      btn.type = "button";
+      btn.title = "Recenter on search results";
+      btn.setAttribute("aria-label", btn.title);
+      btn.innerHTML =
+        `<svg viewBox="0 0 24 24" width="16" height="16" ` +
+        `fill="none" stroke="currentColor" stroke-width="2" ` +
+        `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+        `<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>` +
+        `</svg>`;
+      L.DomEvent.disableClickPropagation(btn);
+      btn.addEventListener("click", recenterOnResults);
+      btn.disabled = true;            // enabled once a result lands
+      return btn;
+    },
+  });
+  return new RecenterCtl();
+}
+
+function _setRecenterEnabled(enabled) {
+  const btn = document.querySelector(".map-recenter-btn");
+  if (!btn) return;
+  btn.disabled = !enabled;
+  btn.classList.toggle("is-enabled", !!enabled);
+}
+
+function recenterOnResults() {
+  if (!MAP_STATE.map || !MAP_STATE.resultBounds) return;
+  MAP_STATE.map.flyToBounds(MAP_STATE.resultBounds, {
+    padding: [40, 40],
+    maxZoom: 14,
+    duration: 0.7,
+  });
+}
+
+// ---- Interactions --------------------------------------------------------
 
 function _onClusterClick(ev) {
   const childMarkers = ev.layer.getAllChildMarkers();
@@ -470,18 +775,20 @@ function _onClusterClick(ev) {
   MAP_STATE.activeAreaFilter = new Set(ids);
   _applyAreaFilterToCards();
   _updateAreaPill(ids.length);
-  // Leaflet also zooms into the cluster on click — good default behaviour.
 }
 
 function _onMarkerClick(listingId) {
+  // If the list tab isn't open, flip to it first so the scroll lands.
+  const listPane = document.getElementById("view-list");
+  if (listPane && listPane.hidden) {
+    setActiveView("list");
+  }
   const card = document.querySelector(
     `.listing-card[data-listing-id="${CSS.escape(listingId)}"]`,
   );
   if (!card) return;
   card.scrollIntoView({ behavior: "smooth", block: "center" });
-  // Restart the pulse animation if it's already running.
   card.classList.remove("pulse");
-  // Force reflow so the animation restarts (queried style forces layout).
   void card.offsetWidth;
   card.classList.add("pulse");
   setTimeout(() => card.classList.remove("pulse"), 1500);
@@ -519,9 +826,62 @@ function _updateMapCounter(n) {
   const el = document.getElementById("map-counter");
   if (!el) return;
   if (n == null) el.textContent = "—";
-  else if (n === 0) el.textContent = "no matches on map";
+  else if (n === 0) el.textContent = "no matches";
   else el.textContent = `${n.toLocaleString("de-CH")} on map`;
 }
+
+function _updateTabCounts(nOnMap) {
+  const listCount = document.getElementById("view-tab-list-count");
+  const mapCount = document.getElementById("view-tab-map-count");
+  if (mapCount) {
+    if (nOnMap > 0) {
+      mapCount.textContent = nOnMap.toLocaleString("de-CH");
+      mapCount.hidden = false;
+    } else {
+      mapCount.hidden = true;
+    }
+  }
+  if (listCount) {
+    const nCards = document.querySelectorAll(".listing-card[data-listing-id]").length;
+    if (nCards > 0) {
+      listCount.textContent = String(nCards);
+      listCount.hidden = false;
+    } else {
+      listCount.hidden = true;
+    }
+  }
+}
+
+// ---- View tabs (List / Map toggle) ---------------------------------------
+
+function setActiveView(view) {
+  const listBtn = document.getElementById("view-tab-list");
+  const mapBtn = document.getElementById("view-tab-map");
+  const listPane = document.getElementById("view-list");
+  const mapPane = document.getElementById("view-map");
+  if (!listBtn || !mapBtn || !listPane || !mapPane) return;
+  const showMap = view === "map";
+  listBtn.classList.toggle("active", !showMap);
+  mapBtn.classList.toggle("active", showMap);
+  listBtn.setAttribute("aria-selected", showMap ? "false" : "true");
+  mapBtn.setAttribute("aria-selected", showMap ? "true" : "false");
+  listPane.hidden = showMap;
+  mapPane.hidden = !showMap;
+  if (showMap) {
+    // Container is now visible — init if we hadn't already, then measure.
+    _initMapOnce();
+    mapNudgeSize();
+    // Drain any searches that happened while the map was hidden.
+    if (MAP_STATE.map && MAP_STATE.pendingPoints !== null) {
+      const pts = MAP_STATE.pendingPoints;
+      MAP_STATE.pendingPoints = null;
+      // Let the tile layer paint a frame first, then render.
+      setTimeout(() => renderMapPoints(pts), 60);
+    }
+  }
+}
+
+// ---- Fetch ---------------------------------------------------------------
 
 async function fetchAndRenderMap(mapRequestBody) {
   const myToken = ++MAP_STATE.fetchToken;
@@ -534,8 +894,6 @@ async function fetchAndRenderMap(mapRequestBody) {
       body: JSON.stringify(mapRequestBody),
     });
     if (!r.ok) {
-      // Non-blocking: if the map endpoint fails, leave the last-known map
-      // state up and emit a WARN — the card list below is still authoritative.
       console.warn(
         `[WARN] map_fetch_failed: expected=200 from /listings/map, ` +
           `got=${r.status}, fallback=leave current map state`,
@@ -543,7 +901,6 @@ async function fetchAndRenderMap(mapRequestBody) {
       return;
     }
     const data = await r.json();
-    // Stale response: a newer search fired while this one was in flight.
     if (myToken !== MAP_STATE.fetchToken) return;
     renderMapPoints(data.points || []);
   } catch (e) {
@@ -2728,13 +3085,23 @@ async function runQuery(query, limit) {
 
 // ---------- wiring -----------------------------------------------------------
 
-// Initialize the map at Switzerland bbox as soon as the DOM + Leaflet are ready.
-// Runs before any search; the map sits idle showing the whole country until
-// the user submits a query.
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", _initMapOnce);
-} else {
+// Boot path: init the map module once the DOM + Leaflet CDN are ready so
+// search results can populate it even while the user is still looking at
+// the List view. When the user first flips to the Map tab, invalidateSize
+// forces a tile paint (the #map container reported 0 height while hidden,
+// and Leaflet caches that measurement — we have to re-measure explicitly).
+function _wireMapTabsAndBoot() {
+  const listBtn = document.getElementById("view-tab-list");
+  const mapBtn = document.getElementById("view-tab-map");
+  if (listBtn) listBtn.addEventListener("click", () => setActiveView("list"));
+  if (mapBtn) mapBtn.addEventListener("click", () => setActiveView("map"));
   _initMapOnce();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", _wireMapTabsAndBoot);
+} else {
+  _wireMapTabsAndBoot();
 }
 
 els.form.addEventListener("submit", (ev) => {
