@@ -1480,7 +1480,10 @@ code {
   -webkit-backdrop-filter: blur(10px);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: hidden;            /* keep the header gradient clipped to the
+                                  rounded corners. Tooltips render into
+                                  document.body via JS, so they escape this
+                                  clip cleanly. */
   animation: float-ui-in 0.4s ease-out;
 }
 
@@ -3575,115 +3578,121 @@ code {
 }
 
 /* =========================================================================
-   INFO DOTS — slim inline hint icons with CSS-only hover/focus tooltips.
-   Used next to widget labels so first-time users learn the interaction
-   model without having to open the full guide drawer. Every tooltip payload
-   lives in `data-tip` on the dot itself — no JS, no positioning library.
-   Designed to be small (15px), unobtrusive (muted grey), and only visually
-   claim attention on hover/focus (amber tint + floating tip).
+   INFO DOTS — slim inline hint icons. The hover/focus tooltip is rendered
+   into document.body by demo.js (see _wireInfoDots) so it escapes every
+   `overflow: hidden` ancestor (the refine drawer + the map pane both clip
+   their content, which was hiding the earlier CSS-only tooltips). The
+   visual design lives here; the show/hide + positioning logic lives in JS.
    ========================================================================= */
 
 .info-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   margin-left: 6px;
+  padding: 0;
   border-radius: 50%;
-  background: #eef0f2;
-  color: #6b7280;
-  font-size: 10px;
-  font-weight: 700;
-  font-style: italic;
-  font-family: Georgia, "Times New Roman", serif;
-  line-height: 1;
+  background: transparent;
+  color: #9ca3af;
   cursor: help;
   user-select: none;
-  position: relative;
-  border: 1px solid transparent;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
-              transform 0.15s ease;
+  border: 0;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
   vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.info-dot svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  pointer-events: none;
 }
 
 .info-dot:hover,
 .info-dot:focus {
   background: #fff7ed;
   color: #b45309;
-  border-color: #fcd6b4;
   transform: scale(1.08);
   outline: none;
 }
 
-/* Inverse palette for use on dark/amber backgrounds (e.g. the "Only top"
-   toggle when pressed). Keeps the glyph legible without breaking the
-   button's colour theme. */
+.info-dot:focus-visible {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
+}
+
+/* Inverse palette for dark/amber-painted surfaces (e.g. the "Only top"
+   toggle when aria-pressed="true"). */
 .info-dot-inverse {
-  background: rgba(255, 255, 255, 0.28);
-  color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .info-dot-inverse:hover,
 .info-dot-inverse:focus {
-  background: rgba(255, 255, 255, 0.6);
-  color: #78350f;
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
 }
 
-/* Floating tooltip — balloon + arrow. We use two pseudo-elements: the body
-   (::after) and a downward-pointing triangle arrow (::before). Both animate
-   together on :hover/:focus. The tip is positioned above the dot by default;
-   clamp against viewport edges via a slightly narrower max-width and
-   inline-block layout. */
-.info-dot::after {
-  content: attr(data-tip);
-  position: absolute;
-  bottom: calc(100% + 9px);
-  left: 50%;
-  transform: translateX(-50%) translateY(4px);
-  white-space: normal;
-  text-align: left;
-  width: 240px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: #111827;
-  color: #f9fafb;
-  font-size: 11.5px;
+/* --- Floating tooltip (JS-attached to document.body) -------------------
+   Warm-white card with an amber accent strip + downward arrow. Position is
+   computed in JS (fixed coords). The CSS only styles shape + enter/leave. */
+.info-tip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 260px;
+  min-width: 160px;
+  padding: 10px 13px 11px;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: 12px;
   font-weight: 400;
-  font-style: normal;
-  font-family: inherit;
-  line-height: 1.45;
+  line-height: 1.5;
   letter-spacing: 0;
   box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.18),
-    0 16px 28px rgba(0, 0, 0, 0.14);
-  opacity: 0;
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.08),
+    0 16px 36px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-left: 3px solid #f59e0b;          /* warm accent matches the site */
   pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
   transition: opacity 0.18s ease, transform 0.18s ease;
-  z-index: 800;                    /* above Leaflet popups (700) */
 }
 
-.info-dot::before {
+.info-tip.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Arrow: points down by default (tip above its dot). If the JS decides
+   there's not enough room above, it toggles `.is-below` on the tip and
+   the arrow flips to point up. The horizontal position (--arrow-x) is
+   set by JS when the tip is clamped against the viewport edge. */
+.info-tip::after {
   content: "";
   position: absolute;
-  bottom: calc(100% + 4px);
-  left: 50%;
+  top: 100%;
+  left: var(--arrow-x, 50%);
   transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: #111827;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.18s ease;
-  z-index: 801;
+  border: 6px solid transparent;
+  border-top-color: #ffffff;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.06));
 }
 
-.info-dot:hover::after,
-.info-dot:focus::after,
-.info-dot:hover::before,
-.info-dot:focus::before {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
+.info-tip.is-below::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: #ffffff;
+  filter: drop-shadow(0 -1px 1px rgba(0, 0, 0, 0.06));
 }
 
 /* First-visit nudge on the Guide button — a short, one-time attention pulse

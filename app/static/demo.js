@@ -3928,6 +3928,150 @@ function _wireMapTabsAndBoot() {
   // the listener binding can happen even while the map tab is hidden.
   _wireWidgetPanel();
   _wireHelpDrawer();
+  _wireInfoDots();
+}
+
+// ---------- Info dots (hover tooltips on widget labels) ------------------
+// Each .info-dot carries its tooltip text in data-tip. On hover/focus we
+// create a single <div class="info-tip"> floating popover in document.body
+// and position it relative to the dot's viewport rect. This bypasses every
+// `overflow: hidden` ancestor (the refine drawer + the map pane both clip
+// their content, which clipped the earlier CSS-only tooltips). Flip above
+// -> below when the tip would run off the top of the viewport; clamp left/
+// right to keep it inside the window. Single reusable tip element — cheap.
+
+function _wireInfoDots() {
+  const dots = document.querySelectorAll(".info-dot[data-tip]");
+  if (!dots.length) return;
+
+  let tipEl = null;
+  let hideTimer = null;
+  let currentDot = null;
+
+  function ensureTipEl() {
+    if (tipEl) return tipEl;
+    tipEl = document.createElement("div");
+    tipEl.className = "info-tip";
+    tipEl.setAttribute("role", "tooltip");
+    document.body.appendChild(tipEl);
+    return tipEl;
+  }
+
+  function positionAndShow(dot) {
+    currentDot = dot;
+    const tip = ensureTipEl();
+    tip.textContent = dot.getAttribute("data-tip") || "";
+    tip.classList.remove("is-below");
+
+    // Make it measurable first (render offscreen-ish before transitioning in).
+    tip.style.left = "-9999px";
+    tip.style.top = "-9999px";
+    tip.classList.remove("is-visible");
+
+    // Read next-frame so the tip has dimensions; avoid a layout flash.
+    requestAnimationFrame(() => {
+      const r = dot.getBoundingClientRect();
+      const tipRect = tip.getBoundingClientRect();
+      const margin = 10;          // visual gap between dot and tip
+      const viewportW = document.documentElement.clientWidth;
+      const viewportH = document.documentElement.clientHeight;
+
+      // Prefer placement ABOVE the dot; flip BELOW if there's no room.
+      let top = r.top - tipRect.height - margin;
+      let placedBelow = false;
+      if (top < 8) {
+        top = r.bottom + margin;
+        placedBelow = true;
+      }
+
+      // Horizontally centre on the dot, then clamp to viewport.
+      const dotCentreX = r.left + r.width / 2;
+      let left = dotCentreX - tipRect.width / 2;
+      const edgePad = 8;
+      const clampedLeft = Math.max(
+        edgePad,
+        Math.min(left, viewportW - tipRect.width - edgePad),
+      );
+      left = clampedLeft;
+
+      // The arrow should still point at the dot centre even after clamp —
+      // compute its horizontal offset INSIDE the tip and expose as CSS var.
+      const arrowX = dotCentreX - left;
+      const arrowXClamped = Math.max(
+        14,
+        Math.min(arrowX, tipRect.width - 14),
+      );
+
+      tip.style.left = `${Math.round(left)}px`;
+      tip.style.top = `${Math.round(top)}px`;
+      tip.style.setProperty("--arrow-x", `${Math.round(arrowXClamped)}px`);
+      tip.classList.toggle("is-below", placedBelow);
+      tip.classList.add("is-visible");
+
+      // Defensive: if viewport is tiny and the tip overflows both axes,
+      // announce the fallback so we can tune breakpoints later.
+      if (top < 0 || top + tipRect.height > viewportH) {
+        console.info(
+          `[INFO] info_tip_overflow: expected=tip within viewport, ` +
+            `got=top=${top} height=${tipRect.height}, fallback=keep shown`,
+        );
+      }
+    });
+  }
+
+  function hide() {
+    if (!tipEl) return;
+    tipEl.classList.remove("is-visible");
+    currentDot = null;
+  }
+
+  function scheduleHide(delayMs = 80) {
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(hide, delayMs);
+  }
+
+  function clearHide() {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  }
+
+  dots.forEach((dot) => {
+    // Ensure focusability if the HTML forgot (e.g. a future author adds a
+    // new dot without tabindex). Keep the aria-label the author set.
+    if (!dot.hasAttribute("tabindex")) dot.setAttribute("tabindex", "0");
+    dot.addEventListener("mouseenter", () => {
+      clearHide();
+      positionAndShow(dot);
+    });
+    dot.addEventListener("mouseleave", () => scheduleHide());
+    dot.addEventListener("focus", () => {
+      clearHide();
+      positionAndShow(dot);
+    });
+    dot.addEventListener("blur", () => scheduleHide(0));
+    // Prevent scroll-jump when space/enter is pressed on a focused dot.
+    dot.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") {
+        dot.blur();
+        hide();
+      }
+    });
+  });
+
+  // Re-position (or hide) on scroll/resize so the tip doesn't drift off
+  // the dot. Using passive listeners to avoid scroll jank on long pages.
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (currentDot) positionAndShow(currentDot);
+    },
+    { passive: true, capture: true },
+  );
+  window.addEventListener("resize", () => {
+    if (currentDot) positionAndShow(currentDot);
+  });
 }
 
 // ---------- Quick-tour help drawer ----------------------------------------
